@@ -84,7 +84,7 @@ final class ProcessTapController {
         // Create IO proc with gain processing
         err = AudioDeviceCreateIOProcIDWithBlock(&deviceProcID, aggregateDeviceID, queue) { [weak self] inNow, inInputData, inInputTime, outOutputData, inOutputTime in
             guard let self else { return }
-            self.processAudio(inInputData)
+            self.processAudio(inInputData, to: outOutputData)
         }
         guard err == noErr else {
             throw NSError(domain: NSOSStatusErrorDomain, code: Int(err), userInfo: [NSLocalizedDescriptionKey: "Failed to create IO proc: \(err)"])
@@ -99,18 +99,23 @@ final class ProcessTapController {
         logger.info("Tap activated for \(self.app.name)")
     }
 
-    private func processAudio(_ bufferList: UnsafePointer<AudioBufferList>) {
+    private func processAudio(_ inputBufferList: UnsafePointer<AudioBufferList>, to outputBufferList: UnsafeMutablePointer<AudioBufferList>) {
         let currentVolume = volume
 
-        // Apply gain to all buffers
-        let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: bufferList))
-        for buffer in buffers {
-            guard let data = buffer.mData else { continue }
-            let samples = data.assumingMemoryBound(to: Float.self)
-            let sampleCount = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
+        let inputBuffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputBufferList))
+        let outputBuffers = UnsafeMutableAudioBufferListPointer(outputBufferList)
+
+        // Copy input to output with gain applied
+        for (inputBuffer, outputBuffer) in zip(inputBuffers, outputBuffers) {
+            guard let inputData = inputBuffer.mData,
+                  let outputData = outputBuffer.mData else { continue }
+
+            let inputSamples = inputData.assumingMemoryBound(to: Float.self)
+            let outputSamples = outputData.assumingMemoryBound(to: Float.self)
+            let sampleCount = Int(inputBuffer.mDataByteSize) / MemoryLayout<Float>.size
 
             for i in 0..<sampleCount {
-                samples[i] *= currentVolume
+                outputSamples[i] = inputSamples[i] * currentVolume
             }
         }
     }
