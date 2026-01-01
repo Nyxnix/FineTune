@@ -6,14 +6,21 @@ import os
 @MainActor
 final class AudioEngine {
     let monitor = AudioProcessMonitor()
-    let volumeState = VolumeState()
+    let volumeState: VolumeState
+    let settingsManager: SettingsManager
 
     private var taps: [pid_t: ProcessTapController] = [:]
+    private var appliedPIDs: Set<pid_t> = []
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FineTune", category: "AudioEngine")
 
-    init() {
+    init(settingsManager: SettingsManager? = nil) {
+        let manager = settingsManager ?? SettingsManager()
+        self.settingsManager = manager
+        self.volumeState = VolumeState(settingsManager: manager)
+
         Task { @MainActor in
             monitor.start()
+            applyPersistedVolumes()
         }
     }
 
@@ -23,12 +30,12 @@ final class AudioEngine {
 
     func start() {
         monitor.start()
+        applyPersistedVolumes()
         logger.info("AudioEngine started")
     }
 
     func stop() {
         monitor.stop()
-        // Cleanup all taps
         for tap in taps.values {
             tap.invalidate()
         }
@@ -37,20 +44,36 @@ final class AudioEngine {
     }
 
     func setVolume(for app: AudioApp, to volume: Float) {
-        volumeState.setVolume(for: app.id, to: volume)
+        volumeState.setVolume(for: app.id, to: volume, identifier: app.persistenceIdentifier)
+        applyVolumeToTap(for: app, volume: volume)
+    }
 
+    func getVolume(for app: AudioApp) -> Float {
+        volumeState.getVolume(for: app.id)
+    }
+
+    func applyPersistedVolumes() {
+        for app in apps {
+            guard !appliedPIDs.contains(app.id) else { continue }
+            appliedPIDs.insert(app.id)
+
+            if let savedVolume = volumeState.loadSavedVolume(for: app.id, identifier: app.persistenceIdentifier) {
+                logger.debug("Applying saved volume \(Int(savedVolume * 100))% to \(app.name)")
+                applyVolumeToTap(for: app, volume: savedVolume)
+            }
+        }
+    }
+
+    private func applyVolumeToTap(for app: AudioApp, volume: Float) {
         if volume >= 1.0 {
-            // No need for tap at 100% volume
             if let tap = taps.removeValue(forKey: app.id) {
                 tap.invalidate()
                 logger.debug("Removed tap for \(app.name) (volume at 100%)")
             }
         } else {
-            // Need a tap for volume control
             if let existingTap = taps[app.id] {
                 existingTap.volume = volume
             } else {
-                // Create new tap
                 let tap = ProcessTapController(app: app)
                 tap.volume = volume
                 do {
@@ -64,10 +87,6 @@ final class AudioEngine {
         }
     }
 
-    func getVolume(for app: AudioApp) -> Float {
-        volumeState.getVolume(for: app.id)
-    }
-
     func cleanupStaleTaps() {
         let activePIDs = Set(apps.map { $0.id })
         let stalePIDs = Set(taps.keys).subtracting(activePIDs)
@@ -79,6 +98,7 @@ final class AudioEngine {
             }
         }
 
+        appliedPIDs = appliedPIDs.intersection(activePIDs)
         volumeState.cleanup(keeping: activePIDs)
     }
 }
