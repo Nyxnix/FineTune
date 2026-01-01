@@ -69,9 +69,19 @@ final class AudioEngine {
     }
 
     private func applyVolumeToTap(for app: AudioApp, volume: Float) {
+        let isUnityGain = abs(volume - 1.0) < 0.001
+
         if let existingTap = taps[app.id] {
-            existingTap.volume = volume
-        } else {
+            if isUnityGain {
+                // Destroy tap when returning to unity (no processing needed)
+                existingTap.invalidate()
+                taps.removeValue(forKey: app.id)
+                logger.debug("Removed tap for \(app.name) (unity gain)")
+            } else {
+                existingTap.volume = volume
+            }
+        } else if !isUnityGain {
+            // Only create tap if NOT at unity gain
             let tap = ProcessTapController(app: app)
             tap.volume = volume
             do {
@@ -82,6 +92,7 @@ final class AudioEngine {
                 logger.error("Failed to create tap for \(app.name): \(error.localizedDescription)")
             }
         }
+        // If isUnityGain and no existing tap: do nothing (no tap needed)
     }
 
     func cleanupStaleTaps() {
