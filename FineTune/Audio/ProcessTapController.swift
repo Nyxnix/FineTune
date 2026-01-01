@@ -13,6 +13,14 @@ final class ProcessTapController {
     // for volume control where exact synchronization isn't critical.
     private nonisolated(unsafe) var _volume: Float = 1.0
 
+    // Current interpolated volume (audio thread only, ramps toward _volume)
+    private nonisolated(unsafe) var _currentVolume: Float = 1.0
+
+    // Ramp coefficient for ~30ms smoothing at 48kHz
+    // Formula: 1 - exp(-1 / (sampleRate * rampTimeSeconds))
+    // Conservative value works across 44.1kHz-96kHz sample rates
+    private let rampCoefficient: Float = 0.0007
+
     var volume: Float {
         get { _volume }
         set { _volume = newValue }
@@ -96,16 +104,21 @@ final class ProcessTapController {
             throw NSError(domain: NSOSStatusErrorDomain, code: Int(err), userInfo: [NSLocalizedDescriptionKey: "Failed to start device: \(err)"])
         }
 
+        // Initialize current to target to skip initial fade-in
+        _currentVolume = _volume
+
         logger.info("Tap activated for \(self.app.name)")
     }
 
     private func processAudio(_ inputBufferList: UnsafePointer<AudioBufferList>, to outputBufferList: UnsafeMutablePointer<AudioBufferList>) {
-        let currentVolume = volume
+        // Read target once at start of buffer (atomic Float read)
+        let targetVol = _volume
+        var currentVol = _currentVolume
 
         let inputBuffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputBufferList))
         let outputBuffers = UnsafeMutableAudioBufferListPointer(outputBufferList)
 
-        // Copy input to output with gain applied
+        // Copy input to output with ramped gain and soft limiting
         for (inputBuffer, outputBuffer) in zip(inputBuffers, outputBuffers) {
             guard let inputData = inputBuffer.mData,
                   let outputData = outputBuffer.mData else { continue }
@@ -115,9 +128,44 @@ final class ProcessTapController {
             let sampleCount = Int(inputBuffer.mDataByteSize) / MemoryLayout<Float>.size
 
             for i in 0..<sampleCount {
-                outputSamples[i] = inputSamples[i] * currentVolume
+                // Per-sample volume ramping (one-pole lowpass)
+                currentVol += (targetVol - currentVol) * rampCoefficient
+
+                // Apply gain
+                var sample = inputSamples[i] * currentVol
+
+                // Soft-knee limiter (prevents harsh clipping when boosting)
+                sample = softLimit(sample)
+
+                outputSamples[i] = sample
             }
         }
+
+        // Store for next callback
+        _currentVolume = currentVol
+    }
+
+    /// Soft-knee limiter using asymptotic compression
+    /// Threshold at 0.8, smooth transition to ±1.0 ceiling
+    /// - Parameter sample: Input sample (may exceed ±1.0 when boosted)
+    /// - Returns: Limited sample in range approximately ±1.0
+    @inline(__always)
+    private func softLimit(_ sample: Float) -> Float {
+        let threshold: Float = 0.8
+        let ceiling: Float = 1.0
+
+        let absSample = abs(sample)
+        if absSample <= threshold {
+            return sample  // Below threshold: pass through
+        }
+
+        // Soft knee: smoothly compress above threshold
+        let overshoot = absSample - threshold
+        let headroom = ceiling - threshold  // 0.2
+        // Asymptotic approach to ceiling
+        let compressed = threshold + headroom * (overshoot / (overshoot + headroom))
+
+        return sample >= 0 ? compressed : -compressed
     }
 
     func invalidate() {
