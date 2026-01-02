@@ -5,6 +5,8 @@ import os
 final class ProcessTapController {
     let app: AudioApp
     private let logger: Logger
+    // Note: This queue is passed to AudioDeviceCreateIOProcIDWithBlock but the actual
+    // audio callback runs on CoreAudio's real-time HAL I/O thread, not this queue.
     private let queue = DispatchQueue(label: "ProcessTapController", qos: .userInitiated)
 
     // Lock-free volume access for real-time audio safety
@@ -135,6 +137,17 @@ final class ProcessTapController {
         logger.info("Tap activated for \(self.app.name)")
     }
 
+    /// Audio processing callback - runs on CoreAudio's real-time HAL I/O thread.
+    ///
+    /// **RT SAFETY CONSTRAINTS - DO NOT:**
+    /// - Allocate memory (malloc, Array append, String operations)
+    /// - Acquire locks/mutexes
+    /// - Use Objective-C messaging
+    /// - Call print/logging functions
+    /// - Perform file/network I/O
+    ///
+    /// Current implementation is RT-safe: only atomic Float reads and simple math.
+    /// See: https://developer.apple.com/library/archive/qa/qa1467/_index.html
     private func processAudio(_ inputBufferList: UnsafePointer<AudioBufferList>, to outputBufferList: UnsafeMutablePointer<AudioBufferList>) {
         // Read target once at start of buffer (atomic Float read)
         let targetVol = _volume
