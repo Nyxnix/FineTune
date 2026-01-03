@@ -27,10 +27,7 @@ final class AudioProcessMonitor {
 
         logger.debug("Starting audio process monitor")
 
-        // Initial refresh
-        refresh()
-
-        // Set up process list listener
+        // Set up listener first
         processListListenerBlock = { [weak self] numberAddresses, addresses in
             Task { @MainActor [weak self] in
                 self?.refresh()
@@ -47,6 +44,9 @@ final class AudioProcessMonitor {
         if status != noErr {
             logger.error("Failed to add process list listener: \(status)")
         }
+
+        // Initial refresh
+        refresh()
     }
 
     func stop() {
