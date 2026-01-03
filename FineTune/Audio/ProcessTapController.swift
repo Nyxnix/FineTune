@@ -227,21 +227,25 @@ final class ProcessTapController {
     /// Performs a crossfade switch using two simultaneous taps.
     /// Secondary callback drives timing via sample counting for sample-accurate transitions.
     private func performCrossfadeSwitch(to newOutputUID: String) async throws {
-        logger.info("[CROSSFADE] Step 1: Creating secondary tap for new device")
+        logger.info("[CROSSFADE] Step 1: Preparing crossfade state")
 
-        // 1. Create secondary tap + aggregate for new device
-        // This also initializes _crossfadeTotalSamples and _secondarySampleCount
-        try createSecondaryTap(for: newOutputUID)
-
-        // 2. Wait for secondary tap to warm up (device needs time to start producing audio)
-        try await Task.sleep(for: .milliseconds(20))
-
-        // 3. Enable crossfade - secondary callback now drives progress via sample counting
-        logger.info("[CROSSFADE] Step 3: Starting sample-accurate crossfade (\(CrossfadeConfig.duration * 1000)ms)")
+        // 1. Enable crossfade BEFORE secondary tap starts, so it begins silent
+        // Secondary callback will see _isCrossfading=true and output sin(0)=0 from first sample
         _crossfadeProgress = 0
+        _secondarySampleCount = 0
         _isCrossfading = true
 
-        // 4. Poll for completion (don't control timing - secondary callback does)
+        // 2. Create secondary tap (it will start at sin(0) = 0 = silent)
+        logger.info("[CROSSFADE] Step 2: Creating secondary tap for new device")
+        try createSecondaryTap(for: newOutputUID)
+
+        // 3. Wait for secondary tap to warm up and start producing samples
+        logger.info("[CROSSFADE] Step 3: Waiting for secondary tap warmup...")
+        try await Task.sleep(for: .milliseconds(20))
+
+        logger.info("[CROSSFADE] Step 4: Crossfade in progress (\(CrossfadeConfig.duration * 1000)ms)")
+
+        // 5. Poll for completion (don't control timing - secondary callback does)
         let timeoutMs = Int(CrossfadeConfig.duration * 1000) + 100  // Add 100ms safety margin
         let pollIntervalMs: UInt64 = 5
         var elapsedMs: Int = 0
@@ -254,8 +258,8 @@ final class ProcessTapController {
         // Small buffer to ensure final samples processed
         try await Task.sleep(for: .milliseconds(10))
 
-        // 5. Crossfade complete - destroy primary, promote secondary
-        logger.info("[CROSSFADE] Step 4: Crossfade complete (progress=\(self._crossfadeProgress)), promoting secondary")
+        // 6. Crossfade complete - destroy primary, promote secondary
+        logger.info("[CROSSFADE] Step 5: Crossfade complete (progress=\(self._crossfadeProgress)), promoting secondary")
         _isCrossfading = false
 
         destroyPrimaryTap()
@@ -312,6 +316,7 @@ final class ProcessTapController {
         logger.debug("[CROSSFADE] Created secondary aggregate #\(self.secondaryAggregateID)")
 
         // Initialize sample-accurate crossfade timing from secondary device sample rate
+        // Note: _secondarySampleCount is already set to 0 in performCrossfadeSwitch() before this is called
         let sampleRate: Double
         if let deviceSampleRate = try? secondaryAggregateID.readNominalSampleRate() {
             sampleRate = deviceSampleRate
@@ -319,7 +324,6 @@ final class ProcessTapController {
             sampleRate = 48000
         }
         _crossfadeTotalSamples = CrossfadeConfig.totalSamples(at: sampleRate)
-        _secondarySampleCount = 0
 
         // Compute ramp coefficient for secondary device's sample rate
         let rampTimeSeconds: Float = 0.030  // 30ms smoothing (same as primary)
