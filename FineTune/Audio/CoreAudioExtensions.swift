@@ -147,7 +147,7 @@ extension AudioDeviceID {
             mElement: kAudioObjectPropertyElementMain
         )
 
-        var size: UInt32 = UInt32(MemoryLayout<CFString>.size)
+        var size: UInt32 = UInt32(MemoryLayout<Unmanaged<CFURL>?>.size)
         var iconURL: Unmanaged<CFURL>?
         let err = AudioObjectGetPropertyData(self, &address, 0, nil, &size, &iconURL)
 
@@ -174,6 +174,11 @@ extension AudioDeviceID {
     /// Returns true if this device is a virtual audio device (not real hardware).
     /// Virtual devices include app-created audio routing devices like Microsoft Teams Audio, BlackHole, etc.
     func isVirtualDevice() -> Bool {
+        readTransportType() == kAudioDeviceTransportTypeVirtual
+    }
+
+    /// Returns the transport type of the device (Bluetooth, USB, BuiltIn, Virtual, etc.)
+    func readTransportType() -> UInt32 {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyTransportType,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -181,9 +186,43 @@ extension AudioDeviceID {
         )
         var transportType: UInt32 = 0
         var size = UInt32(MemoryLayout<UInt32>.size)
-        let err = AudioObjectGetPropertyData(self, &address, 0, nil, &size, &transportType)
-        guard err == noErr else { return false }
-        return transportType == kAudioDeviceTransportTypeVirtual
+        AudioObjectGetPropertyData(self, &address, 0, nil, &size, &transportType)
+        return transportType
+    }
+
+    /// Returns an appropriate SF Symbol name based on device name and transport type.
+    /// Used as fallback when kAudioDevicePropertyIcon is not available (Apple devices).
+    func suggestedIconSymbol() -> String {
+        let name = (try? readDeviceName()) ?? ""
+        let transport = readTransportType()
+
+        // AirPods variants
+        if name.contains("AirPods Pro") { return "airpodspro" }
+        if name.contains("AirPods Max") { return "airpodsmax" }
+        if name.contains("AirPods") { return "airpods.gen3" }
+
+        // HomePod variants
+        if name.contains("HomePod mini") { return "homepodmini" }
+        if name.contains("HomePod") { return "homepod" }
+
+        // Apple TV
+        if name.contains("Apple TV") { return "appletv" }
+
+        // Beats
+        if name.contains("Beats") { return "beats.headphones" }
+
+        // By transport type
+        switch transport {
+        case kAudioDeviceTransportTypeBluetooth,
+             kAudioDeviceTransportTypeBluetoothLE:
+            return "headphones"
+        case kAudioDeviceTransportTypeBuiltIn:
+            return "hifispeaker"
+        case kAudioDeviceTransportTypeUSB:
+            return "headphones"
+        default:
+            return "hifispeaker"
+        }
     }
 }
 

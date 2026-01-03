@@ -84,7 +84,9 @@ final class AudioDeviceMonitor {
                     continue
                 }
 
+                // Try Core Audio icon first, fall back to SF Symbol based on device type
                 let icon = deviceID.readDeviceIcon()
+                    ?? NSImage(systemSymbolName: deviceID.suggestedIconSymbol(), accessibilityDescription: name)
 
                 let device = AudioDevice(
                     id: deviceID,
