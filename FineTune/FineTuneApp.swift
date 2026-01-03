@@ -5,11 +5,11 @@ import UserNotifications
 @main
 struct FineTuneApp: App {
     @State private var audioEngine: AudioEngine
-    @State private var systemVolumeMonitor: SystemVolumeMonitor
+    @State private var deviceVolumeMonitor: DeviceVolumeMonitor
 
     var body: some Scene {
         MenuBarExtra("FineTune", systemImage: "slider.horizontal.3") {
-            MenuBarPopupView(audioEngine: audioEngine, systemVolumeMonitor: systemVolumeMonitor)
+            MenuBarPopupView(audioEngine: audioEngine, deviceVolumeMonitor: deviceVolumeMonitor)
         }
         .menuBarExtraStyle(.window)
     }
@@ -19,10 +19,10 @@ struct FineTuneApp: App {
         let engine = AudioEngine(settingsManager: settings)
         _audioEngine = State(initialValue: engine)
 
-        let volumeMonitor = SystemVolumeMonitor(deviceMonitor: engine.deviceMonitor)
-        _systemVolumeMonitor = State(initialValue: volumeMonitor)
+        let volumeMonitor = DeviceVolumeMonitor(deviceMonitor: engine.deviceMonitor)
+        _deviceVolumeMonitor = State(initialValue: volumeMonitor)
 
-        // Start system volume monitor
+        // Start device volume monitor
         Task { @MainActor in
             volumeMonitor.start()
         }
