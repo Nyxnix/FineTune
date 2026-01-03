@@ -3,6 +3,20 @@ import AudioToolbox
 import os
 
 final class ProcessTapController {
+    /// Configuration for crossfade behavior
+    private enum CrossfadeConfig {
+        static let defaultDuration: TimeInterval = 0.050  // 50ms
+
+        static var duration: TimeInterval {
+            let custom = UserDefaults.standard.double(forKey: "FineTuneCrossfadeDuration")
+            return custom > 0 ? custom : defaultDuration
+        }
+
+        static func totalSamples(at sampleRate: Double) -> Int64 {
+            Int64(sampleRate * duration)
+        }
+    }
+
     let app: AudioApp
     private let logger: Logger
     // Note: This queue is passed to AudioDeviceCreateIOProcIDWithBlock but the actual
@@ -15,8 +29,10 @@ final class ProcessTapController {
     // for volume control where exact synchronization isn't critical.
     private nonisolated(unsafe) var _volume: Float = 1.0
 
-    // Current interpolated volume (audio thread only, ramps toward _volume)
-    private nonisolated(unsafe) var _currentVolume: Float = 1.0
+    // Separate volume states for primary and secondary taps (fixes race condition)
+    // Each callback ramps independently toward _volume
+    private nonisolated(unsafe) var _primaryCurrentVolume: Float = 1.0
+    private nonisolated(unsafe) var _secondaryCurrentVolume: Float = 1.0
 
     // Force silence flag - when true, output zeros regardless of input
     // Used during device switching to prevent clicks/pops
@@ -52,6 +68,10 @@ final class ProcessTapController {
     // Crossfade state: 0 = full primary, 1 = full secondary
     private nonisolated(unsafe) var _crossfadeProgress: Float = 0
     private nonisolated(unsafe) var _isCrossfading: Bool = false
+
+    // Sample-accurate crossfade timing (secondary callback drives progress)
+    private nonisolated(unsafe) var _secondarySampleCount: Int64 = 0
+    private nonisolated(unsafe) var _crossfadeTotalSamples: Int64 = 0
 
     init(app: AudioApp, targetDeviceUID: String? = nil) {
         self.app = app
@@ -156,7 +176,7 @@ final class ProcessTapController {
         }
 
         // Initialize current to target to skip initial fade-in
-        _currentVolume = _volume
+        _primaryCurrentVolume = _volume
 
         // Only set activated after complete success
         activated = true
@@ -362,7 +382,7 @@ final class ProcessTapController {
 
         try performDeviceSwitch(to: newDeviceUID, tapDesc: tapDesc)
 
-        _currentVolume = 0
+        _primaryCurrentVolume = 0
         _volume = 0
 
         try await Task.sleep(for: .milliseconds(150))
@@ -479,10 +499,13 @@ final class ProcessTapController {
 
         // Read target once at start of buffer (atomic Float read)
         let targetVol = _volume
-        var currentVol = _currentVolume
+        var currentVol = _primaryCurrentVolume
 
-        // During crossfade, primary tap fades OUT (1 → 0)
-        let crossfadeMultiplier: Float = _isCrossfading ? (1.0 - _crossfadeProgress) : 1.0
+        // During crossfade, primary tap fades OUT using equal-power curve
+        // cos(0) = 1.0, cos(π/2) = 0.0
+        let crossfadeMultiplier: Float = _isCrossfading
+            ? cos(_crossfadeProgress * .pi / 2.0)
+            : 1.0
 
         let inputBuffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputBufferList))
 
@@ -510,23 +533,32 @@ final class ProcessTapController {
         }
 
         // Store for next callback
-        _currentVolume = currentVol
+        _primaryCurrentVolume = currentVol
     }
 
     /// Audio processing callback for SECONDARY tap.
     /// During crossfade: fades IN (0 → 1) while primary fades out.
-    /// After promotion to primary: behaves like processAudio with full volume ramping.
+    /// OWNS crossfade timing via sample counting for sample-accurate transitions.
     private func processAudioSecondary(_ inputBufferList: UnsafePointer<AudioBufferList>, to outputBufferList: UnsafeMutablePointer<AudioBufferList>) {
         let outputBuffers = UnsafeMutableAudioBufferListPointer(outputBufferList)
 
-        // Read target volume and current ramped volume
+        // Read target volume
         let targetVol = _volume
-        var currentVol = _currentVolume
+        var currentVol = _secondaryCurrentVolume
 
-        // Secondary tap fades IN (0 → 1) during crossfade, full volume after
-        let crossfadeMultiplier: Float = _isCrossfading ? _crossfadeProgress : 1.0
+        // Compute crossfade multiplier and update progress (sample-accurate)
+        var crossfadeMultiplier: Float = 1.0
+        if _isCrossfading {
+            // Update progress based on samples processed
+            let progress = min(1.0, Float(_secondarySampleCount) / Float(max(1, _crossfadeTotalSamples)))
+            _crossfadeProgress = progress
+            // Equal-power fade IN: sin(0) = 0.0, sin(π/2) = 1.0
+            crossfadeMultiplier = sin(progress * .pi / 2.0)
+        }
 
         let inputBuffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputBufferList))
+
+        var totalSamplesThisBuffer: Int = 0
 
         // Copy input to output with ramped gain and crossfade
         for (inputBuffer, outputBuffer) in zip(inputBuffers, outputBuffers) {
@@ -537,8 +569,13 @@ final class ProcessTapController {
             let outputSamples = outputData.assumingMemoryBound(to: Float.self)
             let sampleCount = Int(inputBuffer.mDataByteSize) / MemoryLayout<Float>.size
 
+            // Track samples for counter (only count once, not per channel)
+            if totalSamplesThisBuffer == 0 {
+                totalSamplesThisBuffer = sampleCount / 2  // Stereo interleaved: frames = samples / 2
+            }
+
             for i in 0..<sampleCount {
-                // Per-sample volume ramping (same as processAudio)
+                // Per-sample volume ramping
                 currentVol += (targetVol - currentVol) * rampCoefficient
 
                 // Apply ramped gain with crossfade multiplier
@@ -551,8 +588,13 @@ final class ProcessTapController {
             }
         }
 
-        // Store for next callback (enables volume changes to take effect)
-        _currentVolume = currentVol
+        // Increment sample counter (once per callback, after processing)
+        if _isCrossfading {
+            _secondarySampleCount += Int64(totalSamplesThisBuffer)
+        }
+
+        // Store for next callback
+        _secondaryCurrentVolume = currentVol
     }
 
     /// Soft-knee limiter using asymptotic compression.
