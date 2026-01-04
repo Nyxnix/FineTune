@@ -5,11 +5,10 @@ import UserNotifications
 @main
 struct FineTuneApp: App {
     @State private var audioEngine: AudioEngine
-    @State private var deviceVolumeMonitor: DeviceVolumeMonitor
 
     var body: some Scene {
         MenuBarExtra("FineTune", systemImage: "slider.horizontal.3") {
-            MenuBarPopupView(audioEngine: audioEngine, deviceVolumeMonitor: deviceVolumeMonitor)
+            MenuBarPopupView(audioEngine: audioEngine, deviceVolumeMonitor: audioEngine.deviceVolumeMonitor)
         }
         .menuBarExtraStyle(.window)
     }
@@ -19,13 +18,8 @@ struct FineTuneApp: App {
         let engine = AudioEngine(settingsManager: settings)
         _audioEngine = State(initialValue: engine)
 
-        let volumeMonitor = DeviceVolumeMonitor(deviceMonitor: engine.deviceMonitor)
-        _deviceVolumeMonitor = State(initialValue: volumeMonitor)
-
-        // Start device volume monitor
-        Task { @MainActor in
-            volumeMonitor.start()
-        }
+        // DeviceVolumeMonitor is now created and started inside AudioEngine
+        // This ensures proper initialization order: deviceMonitor.start() -> deviceVolumeMonitor.start()
 
         // Request notification authorization (for device disconnect alerts)
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { granted, error in

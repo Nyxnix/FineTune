@@ -77,6 +77,11 @@ final class ProcessTapController {
     private nonisolated(unsafe) var _secondarySampleCount: Int64 = 0
     private nonisolated(unsafe) var _crossfadeTotalSamples: Int64 = 0
 
+    // Warmup tracking: don't destroy primary until secondary has processed enough samples
+    // Ensures secondary HAL I/O thread is fully connected before app unmutes
+    private nonisolated(unsafe) var _secondarySamplesProcessed: Int = 0
+    private let minimumWarmupSamples: Int = 2048  // ~43ms at 48kHz
+
     init(app: AudioApp, targetDeviceUID: String? = nil) {
         self.app = app
         self.targetDeviceUID = targetDeviceUID
@@ -286,24 +291,41 @@ final class ProcessTapController {
         // Enable crossfade BEFORE secondary tap starts, so it begins silent
         _crossfadeProgress = 0
         _secondarySampleCount = 0
+        _secondarySamplesProcessed = 0  // Reset warmup counter for new secondary tap
         _isCrossfading = true
 
         // Create secondary tap (it will start at sin(0) = 0 = silent)
         logger.info("[CROSSFADE] Step 3: Creating secondary tap for new device")
         try createSecondaryTap(for: newOutputUID)
 
+        // Check if destination is Bluetooth - needs longer warmup due to BT connection latency
+        var isBluetoothDestination = false
+        if let devices = try? AudioObjectID.readDeviceList(),
+           let destDevice = devices.first(where: { (try? $0.readDeviceUID()) == newOutputUID }) {
+            let transport = destDevice.readTransportType()
+            isBluetoothDestination = (transport == kAudioDeviceTransportTypeBluetooth ||
+                                       transport == kAudioDeviceTransportTypeBluetoothLE)
+            if isBluetoothDestination {
+                logger.info("[CROSSFADE] Destination is Bluetooth - using extended warmup")
+            }
+        }
+
         // Wait for secondary tap to warm up and start producing samples
-        logger.info("[CROSSFADE] Step 4: Waiting for secondary tap warmup...")
-        try await Task.sleep(for: .milliseconds(20))
+        // Bluetooth devices need much longer warmup due to connection latency
+        let warmupMs = isBluetoothDestination ? 300 : 50
+        logger.info("[CROSSFADE] Step 4: Waiting for secondary tap warmup (\(warmupMs)ms)...")
+        try await Task.sleep(for: .milliseconds(UInt64(warmupMs)))
 
         logger.info("[CROSSFADE] Step 5: Crossfade in progress (\(CrossfadeConfig.duration * 1000)ms)")
 
         // Poll for completion (don't control timing - secondary callback does)
-        let timeoutMs = Int(CrossfadeConfig.duration * 1000) + 100  // Add 100ms safety margin
+        // Wait for BOTH: crossfade animation complete AND secondary tap warmup complete
+        // Bluetooth gets extended timeout to account for connection latency
+        let timeoutMs = Int(CrossfadeConfig.duration * 1000) + (isBluetoothDestination ? 400 : 100)
         let pollIntervalMs: UInt64 = 5
         var elapsedMs: Int = 0
 
-        while _crossfadeProgress < 1.0 && elapsedMs < timeoutMs {
+        while (_crossfadeProgress < 1.0 || _secondarySamplesProcessed < minimumWarmupSamples) && elapsedMs < timeoutMs {
             try await Task.sleep(for: .milliseconds(pollIntervalMs))
             elapsedMs += Int(pollIntervalMs)
         }
@@ -312,7 +334,7 @@ final class ProcessTapController {
         try await Task.sleep(for: .milliseconds(10))
 
         // Crossfade complete - destroy primary, promote secondary
-        logger.info("[CROSSFADE] Step 6: Crossfade complete (progress=\(self._crossfadeProgress)), promoting secondary")
+        logger.info("[CROSSFADE] Crossfade complete, promoting secondary")
         _isCrossfading = false
 
         destroyPrimaryTap()
@@ -756,7 +778,11 @@ final class ProcessTapController {
             }
         }
 
-        // Increment sample counter (once per callback, after processing)
+        // Increment warmup counter (always, even after crossfade completes)
+        // This tracks that secondary HAL I/O is actively processing audio
+        _secondarySamplesProcessed += totalSamplesThisBuffer
+
+        // Increment crossfade sample counter (only during crossfade animation)
         if _isCrossfading {
             _secondarySampleCount += Int64(totalSamplesThisBuffer)
         }

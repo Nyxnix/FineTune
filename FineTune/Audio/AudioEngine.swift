@@ -8,6 +8,7 @@ import UserNotifications
 final class AudioEngine {
     let processMonitor = AudioProcessMonitor()
     let deviceMonitor = AudioDeviceMonitor()
+    let deviceVolumeMonitor: DeviceVolumeMonitor
     let volumeState: VolumeState
     let settingsManager: SettingsManager
 
@@ -24,10 +25,15 @@ final class AudioEngine {
         let manager = settingsManager ?? SettingsManager()
         self.settingsManager = manager
         self.volumeState = VolumeState(settingsManager: manager)
+        self.deviceVolumeMonitor = DeviceVolumeMonitor(deviceMonitor: deviceMonitor)
 
         Task { @MainActor in
             processMonitor.start()
             deviceMonitor.start()
+
+            // Start device volume monitor AFTER deviceMonitor.start() populates devices
+            // This fixes the race condition where volumes were read before devices existed
+            deviceVolumeMonitor.start()
 
             processMonitor.onAppsChanged = { [weak self] _ in
                 self?.cleanupStaleTaps()

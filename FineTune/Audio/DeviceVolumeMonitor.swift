@@ -196,11 +196,29 @@ final class DeviceVolumeMonitor {
         logger.debug("Volume changed for device \(deviceID): \(newVolume)")
     }
 
-    /// Reads the current volume for all tracked devices
+    /// Reads the current volume for all tracked devices.
+    /// For Bluetooth devices, schedules a delayed re-read because the HAL may report
+    /// default volume (1.0) for 50-200ms after the device appears.
     private func readAllVolumes() {
         for device in deviceMonitor.outputDevices {
             let volume = device.id.readOutputVolumeScalar()
             volumes[device.id] = volume
+
+            // Bluetooth devices may not have valid volume immediately after appearing.
+            // The HAL returns 1.0 (default) until the BT firmware handshake completes.
+            // Schedule a delayed re-read to get the actual volume.
+            let transportType = device.id.readTransportType()
+            if transportType == kAudioDeviceTransportTypeBluetooth ||
+               transportType == kAudioDeviceTransportTypeBluetoothLE {
+                let deviceID = device.id
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .milliseconds(200))
+                    guard let self, self.volumes.keys.contains(deviceID) else { return }
+                    let confirmedVolume = deviceID.readOutputVolumeScalar()
+                    self.volumes[deviceID] = confirmedVolume
+                    self.logger.debug("Bluetooth device \(deviceID) re-read volume: \(confirmedVolume)")
+                }
+            }
         }
     }
 
