@@ -23,6 +23,9 @@ final class ProcessTapController {
     // audio callback runs on CoreAudio's real-time HAL I/O thread, not this queue.
     private let queue = DispatchQueue(label: "ProcessTapController", qos: .userInitiated)
 
+    /// Weak reference to device monitor for O(1) device lookups during crossfade
+    private weak var deviceMonitor: AudioDeviceMonitor?
+
     // Lock-free volume access for real-time audio safety
     // Aligned Float32 reads/writes are atomic on Apple platforms.
     // Audio thread may read slightly stale volume values, which is acceptable
@@ -82,9 +85,10 @@ final class ProcessTapController {
     private nonisolated(unsafe) var _secondarySamplesProcessed: Int = 0
     private let minimumWarmupSamples: Int = 2048  // ~43ms at 48kHz
 
-    init(app: AudioApp, targetDeviceUID: String) {
+    init(app: AudioApp, targetDeviceUID: String, deviceMonitor: AudioDeviceMonitor? = nil) {
         self.app = app
         self.targetDeviceUID = targetDeviceUID
+        self.deviceMonitor = deviceMonitor
         self.logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FineTune", category: "ProcessTapController(\(app.name))")
     }
 
@@ -222,33 +226,51 @@ final class ProcessTapController {
         logger.info("[CROSSFADE] Step 1: Reading device volumes for compensation")
 
         // Read source device volume and sample rate
+        // Fast path: use cached device lookup (O(1)), fallback to readDeviceList if cache miss
         var sourceVolume: Float = 1.0
         var sourceSampleRate: Float64 = 0
         if let sourceUID = currentDeviceUID {
-            do {
-                let devices = try AudioObjectID.readDeviceList()
-                if let sourceDevice = devices.first(where: { (try? $0.readDeviceUID()) == sourceUID }) {
+            if let sourceDevice = deviceMonitor?.device(for: sourceUID) {
+                // Cache hit - use O(1) lookup
+                sourceVolume = sourceDevice.id.readOutputVolumeScalar()
+                sourceSampleRate = (try? sourceDevice.id.readNominalSampleRate()) ?? 0
+                logger.debug("[CROSSFADE] Source device (cached): volume=\(sourceVolume), sampleRate=\(sourceSampleRate)Hz")
+            } else {
+                // Fallback: device may have disconnected, try fresh read
+                if let devices = try? AudioObjectID.readDeviceList(),
+                   let sourceDevice = devices.first(where: { (try? $0.readDeviceUID()) == sourceUID }) {
                     sourceVolume = sourceDevice.readOutputVolumeScalar()
                     sourceSampleRate = (try? sourceDevice.readNominalSampleRate()) ?? 0
-                    logger.debug("[CROSSFADE] Source device: volume=\(sourceVolume), sampleRate=\(sourceSampleRate)Hz")
+                    logger.debug("[CROSSFADE] Source device (fallback): volume=\(sourceVolume), sampleRate=\(sourceSampleRate)Hz")
                 }
-            } catch {
-                logger.warning("[CROSSFADE] Failed to read source device properties: \(error.localizedDescription)")
+                // Continue with defaults if device gone
             }
         }
 
         // Read destination device volume and sample rate
         var destVolume: Float = 1.0
         var destSampleRate: Float64 = 0
-        do {
-            let devices = try AudioObjectID.readDeviceList()
-            if let destDevice = devices.first(where: { (try? $0.readDeviceUID()) == newOutputUID }) {
+        var isBluetoothDestination = false
+
+        if let destDevice = deviceMonitor?.device(for: newOutputUID) {
+            // Cache hit - use O(1) lookup
+            destVolume = destDevice.id.readOutputVolumeScalar()
+            destSampleRate = (try? destDevice.id.readNominalSampleRate()) ?? 0
+            let transport = destDevice.id.readTransportType()
+            isBluetoothDestination = (transport == kAudioDeviceTransportTypeBluetooth ||
+                                       transport == kAudioDeviceTransportTypeBluetoothLE)
+            logger.debug("[CROSSFADE] Destination device (cached): volume=\(destVolume), sampleRate=\(destSampleRate)Hz, BT=\(isBluetoothDestination)")
+        } else {
+            // Fallback: device may have disconnected, try fresh read
+            if let devices = try? AudioObjectID.readDeviceList(),
+               let destDevice = devices.first(where: { (try? $0.readDeviceUID()) == newOutputUID }) {
                 destVolume = destDevice.readOutputVolumeScalar()
                 destSampleRate = (try? destDevice.readNominalSampleRate()) ?? 0
-                logger.debug("[CROSSFADE] Destination device: volume=\(destVolume), sampleRate=\(destSampleRate)Hz")
+                let transport = destDevice.readTransportType()
+                isBluetoothDestination = (transport == kAudioDeviceTransportTypeBluetooth ||
+                                           transport == kAudioDeviceTransportTypeBluetoothLE)
+                logger.debug("[CROSSFADE] Destination device (fallback): volume=\(destVolume), sampleRate=\(destSampleRate)Hz, BT=\(isBluetoothDestination)")
             }
-        } catch {
-            logger.warning("[CROSSFADE] Failed to read destination device properties: \(error.localizedDescription)")
         }
 
         // Log sample rate mismatch but proceed with crossfade anyway
@@ -281,16 +303,8 @@ final class ProcessTapController {
         logger.info("[CROSSFADE] Step 3: Creating secondary tap for new device")
         try createSecondaryTap(for: newOutputUID)
 
-        // Check if destination is Bluetooth - needs longer warmup due to BT connection latency
-        var isBluetoothDestination = false
-        if let devices = try? AudioObjectID.readDeviceList(),
-           let destDevice = devices.first(where: { (try? $0.readDeviceUID()) == newOutputUID }) {
-            let transport = destDevice.readTransportType()
-            isBluetoothDestination = (transport == kAudioDeviceTransportTypeBluetooth ||
-                                       transport == kAudioDeviceTransportTypeBluetoothLE)
-            if isBluetoothDestination {
-                logger.info("[CROSSFADE] Destination is Bluetooth - using extended warmup")
-            }
+        if isBluetoothDestination {
+            logger.info("[CROSSFADE] Destination is Bluetooth - using extended warmup")
         }
 
         // Wait for secondary tap to warm up and start producing samples
@@ -480,17 +494,25 @@ final class ProcessTapController {
         var sourceVolume: Float = 1.0
         var destVolume: Float = 1.0
 
+        // Fast path: use cached device lookup (O(1)), fallback to readDeviceList if cache miss
         if let sourceUID = currentDeviceUID {
-            do {
-                let devices = try AudioObjectID.readDeviceList()
-                if let sourceDevice = devices.first(where: { (try? $0.readDeviceUID()) == sourceUID }) {
-                    sourceVolume = sourceDevice.readOutputVolumeScalar()
+            if let sourceDevice = deviceMonitor?.device(for: sourceUID) {
+                sourceVolume = sourceDevice.id.readOutputVolumeScalar()
+            }
+            if let destDevice = deviceMonitor?.device(for: newOutputUID) {
+                destVolume = destDevice.id.readOutputVolumeScalar()
+            }
+
+            // Fallback if cache misses
+            if deviceMonitor == nil || (deviceMonitor?.device(for: sourceUID) == nil && deviceMonitor?.device(for: newOutputUID) == nil) {
+                if let devices = try? AudioObjectID.readDeviceList() {
+                    if let sourceDevice = devices.first(where: { (try? $0.readDeviceUID()) == sourceUID }) {
+                        sourceVolume = sourceDevice.readOutputVolumeScalar()
+                    }
+                    if let destDevice = devices.first(where: { (try? $0.readDeviceUID()) == newOutputUID }) {
+                        destVolume = destDevice.readOutputVolumeScalar()
+                    }
                 }
-                if let destDevice = devices.first(where: { (try? $0.readDeviceUID()) == newOutputUID }) {
-                    destVolume = destDevice.readOutputVolumeScalar()
-                }
-            } catch {
-                logger.warning("[SWITCH-DESTROY] Failed to read device volumes: \(error.localizedDescription)")
             }
         }
 

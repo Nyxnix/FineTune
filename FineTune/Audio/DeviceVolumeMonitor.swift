@@ -12,6 +12,9 @@ final class DeviceVolumeMonitor {
     /// The current default output device ID
     private(set) var defaultDeviceID: AudioDeviceID = .unknown
 
+    /// The current default output device UID (cached to avoid redundant Core Audio calls)
+    private(set) var defaultDeviceUID: String?
+
     private let deviceMonitor: AudioDeviceMonitor
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FineTune", category: "DeviceVolumeMonitor")
 
@@ -132,10 +135,12 @@ final class DeviceVolumeMonitor {
 
             if newDeviceID.isValid {
                 defaultDeviceID = newDeviceID
-                logger.debug("Default device ID: \(self.defaultDeviceID)")
+                defaultDeviceUID = try? newDeviceID.readDeviceUID()
+                logger.debug("Default device ID: \(self.defaultDeviceID), UID: \(self.defaultDeviceUID ?? "nil")")
             } else {
                 logger.warning("Default output device is invalid")
                 defaultDeviceID = .unknown
+                defaultDeviceUID = nil
             }
 
         } catch {

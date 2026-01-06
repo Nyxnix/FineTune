@@ -5,16 +5,8 @@ struct MenuBarPopupView: View {
     @Bindable var audioEngine: AudioEngine
     @Bindable var deviceVolumeMonitor: DeviceVolumeMonitor
 
-    /// Devices sorted with default device first, then alphabetically by name
-    private var sortedDevices: [AudioDevice] {
-        let devices = audioEngine.outputDevices
-        let defaultID = deviceVolumeMonitor.defaultDeviceID
-        return devices.sorted { lhs, rhs in
-            if lhs.id == defaultID { return true }
-            if rhs.id == defaultID { return false }
-            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-        }
-    }
+    /// Memoized sorted devices - only recomputed when device list or default changes
+    @State private var sortedDevices: [AudioDevice] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -94,5 +86,25 @@ struct MenuBarPopupView: View {
         }
         .padding()
         .frame(width: 520)
+        .onAppear {
+            updateSortedDevices()
+        }
+        .onChange(of: audioEngine.outputDevices) { _, _ in
+            updateSortedDevices()
+        }
+        .onChange(of: deviceVolumeMonitor.defaultDeviceID) { _, _ in
+            updateSortedDevices()
+        }
+    }
+
+    /// Recomputes sorted devices - called only when dependencies change
+    private func updateSortedDevices() {
+        let devices = audioEngine.outputDevices
+        let defaultID = deviceVolumeMonitor.defaultDeviceID
+        sortedDevices = devices.sorted { lhs, rhs in
+            if lhs.id == defaultID { return true }
+            if rhs.id == defaultID { return false }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
     }
 }

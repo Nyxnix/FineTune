@@ -6,19 +6,12 @@ struct DevicePickerView: View {
     let selectedDeviceUID: String
     let onDeviceSelected: (String) -> Void
 
-    private var selectedDevice: AudioDevice? {
-        devices.first { $0.uid == selectedDeviceUID }
-    }
-
-    private var displayName: String {
-        selectedDevice?.name ?? "Unknown Device"
-    }
-
-    private var displayIcon: NSImage? {
-        selectedDevice?.icon
-    }
-
     var body: some View {
+        // Single lookup, cached for this render
+        let selectedDevice = devices.first { $0.uid == selectedDeviceUID }
+        let displayName = selectedDevice?.name ?? "Unknown Device"
+        let displayIcon = selectedDevice?.icon
+
         Menu {
             ForEach(devices) { device in
                 Button {

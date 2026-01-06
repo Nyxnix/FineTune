@@ -81,6 +81,7 @@ final class AudioProcessMonitor {
         // Set up listener first
         processListListenerBlock = { [weak self] numberAddresses, addresses in
             Task { @MainActor [weak self] in
+                self?.logger.debug("[DIAG] kAudioHardwarePropertyProcessObjectList fired")
                 self?.refresh()
             }
         }

@@ -8,6 +8,12 @@ import os
 final class AudioDeviceMonitor {
     private(set) var outputDevices: [AudioDevice] = []
 
+    /// O(1) device lookup by UID
+    private(set) var devicesByUID: [String: AudioDevice] = [:]
+
+    /// O(1) device lookup by AudioDeviceID
+    private(set) var devicesByID: [AudioDeviceID: AudioDevice] = [:]
+
     /// Called immediately when device disappears (passes UID and name)
     var onDeviceDisconnected: ((_ uid: String, _ name: String) -> Void)?
 
@@ -56,8 +62,14 @@ final class AudioDeviceMonitor {
         }
     }
 
+    /// O(1) lookup by device UID
     func device(for uid: String) -> AudioDevice? {
-        outputDevices.first { $0.uid == uid }
+        devicesByUID[uid]
+    }
+
+    /// O(1) lookup by AudioDeviceID
+    func device(for id: AudioDeviceID) -> AudioDevice? {
+        devicesByID[id]
     }
 
     private func refresh() {
@@ -77,9 +89,10 @@ final class AudioDeviceMonitor {
                     continue
                 }
 
-                // Try Core Audio icon first, fall back to SF Symbol based on device type
-                let icon = deviceID.readDeviceIcon()
-                    ?? NSImage(systemSymbolName: deviceID.suggestedIconSymbol(), accessibilityDescription: name)
+                // Try Core Audio icon first (via LRU cache), fall back to SF Symbol
+                let icon = DeviceIconCache.shared.icon(for: uid) {
+                    deviceID.readDeviceIcon()
+                } ?? NSImage(systemSymbolName: deviceID.suggestedIconSymbol(), accessibilityDescription: name)
 
                 let device = AudioDevice(
                     id: deviceID,
@@ -92,6 +105,10 @@ final class AudioDeviceMonitor {
 
             outputDevices = devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             knownDeviceUIDs = Set(devices.map(\.uid))
+
+            // Build O(1) lookup dictionaries
+            devicesByUID = Dictionary(uniqueKeysWithValues: outputDevices.map { ($0.uid, $0) })
+            devicesByID = Dictionary(uniqueKeysWithValues: outputDevices.map { ($0.id, $0) })
 
         } catch {
             logger.error("Failed to refresh device list: \(error.localizedDescription)")

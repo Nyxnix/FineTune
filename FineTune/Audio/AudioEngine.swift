@@ -152,7 +152,7 @@ final class AudioEngine {
     private func ensureTapExists(for app: AudioApp, deviceUID: String) {
         guard taps[app.id] == nil else { return }
 
-        let tap = ProcessTapController(app: app, targetDeviceUID: deviceUID)
+        let tap = ProcessTapController(app: app, targetDeviceUID: deviceUID, deviceMonitor: deviceMonitor)
         tap.volume = volumeState.getVolume(for: app.id)
 
         do {
