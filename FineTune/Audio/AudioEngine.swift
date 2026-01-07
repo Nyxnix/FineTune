@@ -85,6 +85,7 @@ final class AudioEngine {
     }
 
     func setDevice(for app: AudioApp, deviceUID: String) {
+        guard appDeviceRouting[app.id] != deviceUID else { return }
         appDeviceRouting[app.id] = deviceUID
         settingsManager.setDeviceRouting(for: app.persistenceIdentifier, deviceUID: deviceUID)
 
