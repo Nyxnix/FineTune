@@ -20,9 +20,14 @@ struct MenuBarPopupView: View {
                 DeviceVolumeRowView(
                     device: device,
                     volume: deviceVolumeMonitor.volumes[device.id] ?? 1.0,
+                    isMuted: deviceVolumeMonitor.muteStates[device.id] ?? false,
                     isDefault: device.id == deviceVolumeMonitor.defaultDeviceID,
                     onVolumeChange: { volume in
                         deviceVolumeMonitor.setVolume(for: device.id, to: volume)
+                    },
+                    onMuteToggle: {
+                        let currentMute = deviceVolumeMonitor.muteStates[device.id] ?? false
+                        deviceVolumeMonitor.setMute(for: device.id, to: !currentMute)
                     },
                     onSetAsDefault: {
                         deviceVolumeMonitor.setDefaultDevice(device.id)

@@ -9,6 +9,9 @@ final class DeviceVolumeMonitor {
     /// Volumes for all tracked output devices (keyed by AudioDeviceID)
     private(set) var volumes: [AudioDeviceID: Float] = [:]
 
+    /// Mute states for all tracked output devices (keyed by AudioDeviceID)
+    private(set) var muteStates: [AudioDeviceID: Bool] = [:]
+
     /// The current default output device ID
     private(set) var defaultDeviceID: AudioDeviceID = .unknown
 
@@ -20,6 +23,8 @@ final class DeviceVolumeMonitor {
 
     /// Volume listeners for each tracked device
     private var volumeListeners: [AudioDeviceID: AudioObjectPropertyListenerBlock] = [:]
+    /// Mute listeners for each tracked device
+    private var muteListeners: [AudioDeviceID: AudioObjectPropertyListenerBlock] = [:]
     private var defaultDeviceListenerBlock: AudioObjectPropertyListenerBlock?
 
     /// Flag to control the recursive observation loop
@@ -33,6 +38,12 @@ final class DeviceVolumeMonitor {
 
     private var volumeAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+        mScope: kAudioDevicePropertyScopeOutput,
+        mElement: kAudioObjectPropertyElementMain
+    )
+
+    private var muteAddress = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyMute,
         mScope: kAudioDevicePropertyScopeOutput,
         mElement: kAudioObjectPropertyElementMain
     )
@@ -91,7 +102,13 @@ final class DeviceVolumeMonitor {
             removeVolumeListener(for: deviceID)
         }
 
+        // Remove all mute listeners
+        for deviceID in Array(muteListeners.keys) {
+            removeMuteListener(for: deviceID)
+        }
+
         volumes.removeAll()
+        muteStates.removeAll()
     }
 
     /// Sets the volume for a specific device
@@ -124,6 +141,21 @@ final class DeviceVolumeMonitor {
         }
     }
 
+    /// Sets the mute state for a specific device
+    func setMute(for deviceID: AudioDeviceID, to muted: Bool) {
+        guard deviceID.isValid else {
+            logger.warning("Cannot set mute: invalid device ID")
+            return
+        }
+
+        let success = deviceID.setMuteState(muted)
+        if success {
+            muteStates[deviceID] = muted
+        } else {
+            logger.warning("Failed to set mute on device \(deviceID)")
+        }
+    }
+
     // MARK: - Private Methods
 
     private func refreshDefaultDevice() {
@@ -153,26 +185,34 @@ final class DeviceVolumeMonitor {
         refreshDefaultDevice()
     }
 
-    /// Synchronizes volume listeners with the current device list from deviceMonitor
+    /// Synchronizes volume and mute listeners with the current device list from deviceMonitor
     private func refreshDeviceListeners() {
         let currentDeviceIDs = Set(deviceMonitor.outputDevices.map(\.id))
-        let trackedDeviceIDs = Set(volumeListeners.keys)
+        let trackedVolumeIDs = Set(volumeListeners.keys)
+        let trackedMuteIDs = Set(muteListeners.keys)
 
         // Add listeners for new devices
-        let newDeviceIDs = currentDeviceIDs.subtracting(trackedDeviceIDs)
+        let newDeviceIDs = currentDeviceIDs.subtracting(trackedVolumeIDs)
         for deviceID in newDeviceIDs {
             addVolumeListener(for: deviceID)
+            addMuteListener(for: deviceID)
         }
 
         // Remove listeners for stale devices
-        let staleDeviceIDs = trackedDeviceIDs.subtracting(currentDeviceIDs)
-        for deviceID in staleDeviceIDs {
+        let staleVolumeIDs = trackedVolumeIDs.subtracting(currentDeviceIDs)
+        for deviceID in staleVolumeIDs {
             removeVolumeListener(for: deviceID)
             volumes.removeValue(forKey: deviceID)
         }
 
-        // Read volumes for all current devices
-        readAllVolumes()
+        let staleMuteIDs = trackedMuteIDs.subtracting(currentDeviceIDs)
+        for deviceID in staleMuteIDs {
+            removeMuteListener(for: deviceID)
+            muteStates.removeValue(forKey: deviceID)
+        }
+
+        // Read volumes and mute states for all current devices
+        readAllStates()
     }
 
     private func addVolumeListener(for deviceID: AudioDeviceID) {
@@ -216,13 +256,57 @@ final class DeviceVolumeMonitor {
         logger.debug("Volume changed for device \(deviceID): \(newVolume)")
     }
 
-    /// Reads the current volume for all tracked devices.
+    private func addMuteListener(for deviceID: AudioDeviceID) {
+        guard deviceID.isValid else { return }
+        guard muteListeners[deviceID] == nil else { return }
+
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            Task { @MainActor [weak self] in
+                self?.handleMuteChanged(for: deviceID)
+            }
+        }
+
+        muteListeners[deviceID] = block
+
+        var address = muteAddress
+        let status = AudioObjectAddPropertyListenerBlock(
+            deviceID,
+            &address,
+            .main,
+            block
+        )
+
+        if status != noErr {
+            logger.warning("Failed to add mute listener for device \(deviceID): \(status)")
+            muteListeners.removeValue(forKey: deviceID)
+        }
+    }
+
+    private func removeMuteListener(for deviceID: AudioDeviceID) {
+        guard let block = muteListeners[deviceID] else { return }
+
+        var address = muteAddress
+        AudioObjectRemovePropertyListenerBlock(deviceID, &address, .main, block)
+        muteListeners.removeValue(forKey: deviceID)
+    }
+
+    private func handleMuteChanged(for deviceID: AudioDeviceID) {
+        guard deviceID.isValid else { return }
+        let newMuteState = deviceID.readMuteState()
+        muteStates[deviceID] = newMuteState
+        logger.debug("Mute changed for device \(deviceID): \(newMuteState)")
+    }
+
+    /// Reads the current volume and mute state for all tracked devices.
     /// For Bluetooth devices, schedules a delayed re-read because the HAL may report
     /// default volume (1.0) for 50-200ms after the device appears.
-    private func readAllVolumes() {
+    private func readAllStates() {
         for device in deviceMonitor.outputDevices {
             let volume = device.id.readOutputVolumeScalar()
             volumes[device.id] = volume
+
+            let muted = device.id.readMuteState()
+            muteStates[device.id] = muted
 
             // Bluetooth devices may not have valid volume immediately after appearing.
             // The HAL returns 1.0 (default) until the BT firmware handshake completes.
@@ -235,7 +319,9 @@ final class DeviceVolumeMonitor {
                     guard let self, self.volumes.keys.contains(deviceID) else { return }
                     let confirmedVolume = deviceID.readOutputVolumeScalar()
                     self.volumes[deviceID] = confirmedVolume
-                    self.logger.debug("Bluetooth device \(deviceID) re-read volume: \(confirmedVolume)")
+                    let confirmedMute = deviceID.readMuteState()
+                    self.muteStates[deviceID] = confirmedMute
+                    self.logger.debug("Bluetooth device \(deviceID) re-read volume: \(confirmedVolume), muted: \(confirmedMute)")
                 }
             }
         }

@@ -80,3 +80,45 @@ extension AudioDeviceID {
         return err == noErr
     }
 }
+
+// MARK: - Device Mute
+
+extension AudioDeviceID {
+    /// Reads the mute state for the device.
+    /// Returns true if muted, false if unmuted or if mute is not supported.
+    func readMuteState() -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyMute,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        guard AudioObjectHasProperty(self, &address) else {
+            return false
+        }
+
+        var muted: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let err = AudioObjectGetPropertyData(self, &address, 0, nil, &size, &muted)
+        return err == noErr && muted != 0
+    }
+
+    /// Sets the mute state for the device.
+    /// Returns true if successful, false otherwise.
+    func setMuteState(_ muted: Bool) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyMute,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        guard AudioObjectHasProperty(self, &address) else {
+            return false
+        }
+
+        var value: UInt32 = muted ? 1 : 0
+        let size = UInt32(MemoryLayout<UInt32>.size)
+        let err = AudioObjectSetPropertyData(self, &address, 0, nil, size, &value)
+        return err == noErr
+    }
+}

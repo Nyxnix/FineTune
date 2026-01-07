@@ -4,8 +4,10 @@ import SwiftUI
 struct DeviceVolumeRowView: View {
     let device: AudioDevice
     let volume: Float  // 0-1
+    let isMuted: Bool
     let isDefault: Bool
     let onVolumeChange: (Float) -> Void
+    let onMuteToggle: () -> Void
     let onSetAsDefault: () -> Void
 
     @State private var sliderValue: Double  // 0-1
@@ -13,14 +15,18 @@ struct DeviceVolumeRowView: View {
     init(
         device: AudioDevice,
         volume: Float,
+        isMuted: Bool,
         isDefault: Bool,
         onVolumeChange: @escaping (Float) -> Void,
+        onMuteToggle: @escaping () -> Void,
         onSetAsDefault: @escaping () -> Void
     ) {
         self.device = device
         self.volume = volume
+        self.isMuted = isMuted
         self.isDefault = isDefault
         self.onVolumeChange = onVolumeChange
+        self.onMuteToggle = onMuteToggle
         self.onSetAsDefault = onSetAsDefault
         self._sliderValue = State(initialValue: Double(volume))
     }
@@ -55,11 +61,26 @@ struct DeviceVolumeRowView: View {
                 .fontWeight(isDefault ? .semibold : .regular)
                 .lineLimit(1)
 
+            // Mute button
+            Button {
+                onMuteToggle()
+            } label: {
+                Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .foregroundStyle(isMuted ? .red : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help(isMuted ? "Unmute" : "Mute")
+
             // Slider
             Slider(value: $sliderValue, in: 0...1)
                 .frame(minWidth: 120)
                 .tint(.white.opacity(0.7))
+                .opacity(isMuted ? 0.5 : 1.0)
                 .onChange(of: sliderValue) { _, newValue in
+                    // Auto-unmute when slider is moved while muted
+                    if isMuted && newValue != Double(volume) {
+                        onMuteToggle()
+                    }
                     onVolumeChange(Float(newValue))
                 }
 
