@@ -11,10 +11,11 @@ final class SettingsManager {
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FineTune", category: "SettingsManager")
 
     struct Settings: Codable {
-        var version: Int = 3
+        var version: Int = 4
         var appVolumes: [String: Float] = [:]
         var appDeviceRouting: [String: String] = [:]  // bundleID → deviceUID
         var appMutes: [String: Bool] = [:]  // bundleID → isMuted
+        var appEQSettings: [String: EQSettings] = [:]  // bundleID → EQ settings
     }
 
     init(directory: URL? = nil) {
@@ -51,13 +52,22 @@ final class SettingsManager {
         scheduleSave()
     }
 
+    func getEQSettings(for appIdentifier: String) -> EQSettings {
+        return settings.appEQSettings[appIdentifier] ?? EQSettings.flat
+    }
+
+    func setEQSettings(_ eqSettings: EQSettings, for appIdentifier: String) {
+        settings.appEQSettings[appIdentifier] = eqSettings
+        scheduleSave()
+    }
+
     private func loadFromDisk() {
         guard FileManager.default.fileExists(atPath: settingsURL.path) else { return }
 
         do {
             let data = try Data(contentsOf: settingsURL)
             settings = try JSONDecoder().decode(Settings.self, from: data)
-            logger.debug("Loaded settings with \(self.settings.appVolumes.count) volumes, \(self.settings.appDeviceRouting.count) device routings, \(self.settings.appMutes.count) mutes")
+            logger.debug("Loaded settings with \(self.settings.appVolumes.count) volumes, \(self.settings.appDeviceRouting.count) device routings, \(self.settings.appMutes.count) mutes, \(self.settings.appEQSettings.count) EQ settings")
         } catch {
             logger.error("Failed to load settings: \(error.localizedDescription)")
             // Backup corrupted file before resetting
