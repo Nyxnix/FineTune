@@ -28,6 +28,9 @@ struct AppRow: View {
     /// Default volume to restore when unmuting from 0 (50% = unity gain)
     private let defaultUnmuteVolume: Double = 0.5
 
+    /// Fixed height for EQ panel (header ~24 + sliders 70 + padding 20 + top margin 8)
+    private let eqPanelHeight: CGFloat = 130
+
     init(
         app: AudioApp,
         volume: Float,
@@ -140,23 +143,24 @@ struct AppRow: View {
             }
             .frame(height: DesignTokens.Dimensions.rowContentHeight)
 
-            // Expandable EQ panel
-            if isEQExpanded {
-                EQPanelView(
-                    settings: Binding(
-                        get: { eqSettings },
-                        set: { onEQChange($0) }
-                    ),
-                    onPresetSelected: { preset in
-                        onEQChange(preset.settings)
-                    },
-                    onSettingsChanged: { settings in
-                        onEQChange(settings)
-                    }
-                )
-                .padding(.top, DesignTokens.Spacing.sm)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
+            // Expandable EQ panel - hardcoded height for smooth animation
+            EQPanelView(
+                settings: Binding(
+                    get: { eqSettings },
+                    set: { onEQChange($0) }
+                ),
+                onPresetSelected: { preset in
+                    onEQChange(preset.settings)
+                },
+                onSettingsChanged: { settings in
+                    onEQChange(settings)
+                }
+            )
+            .padding(.top, DesignTokens.Spacing.sm)
+            .frame(height: isEQExpanded ? eqPanelHeight : 0, alignment: .top)
+            .clipped()
+            .opacity(isEQExpanded ? 1 : 0)
+            .allowsHitTesting(isEQExpanded)
         }
         .hoverableRow()
         .onChange(of: volume) { _, newValue in

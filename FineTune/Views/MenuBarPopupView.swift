@@ -1,6 +1,14 @@
 // FineTune/Views/MenuBarPopupView.swift
 import SwiftUI
 
+/// PreferenceKey for tracking ScrollView content height
+private struct ContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct MenuBarPopupView: View {
     @Bindable var audioEngine: AudioEngine
     @Bindable var deviceVolumeMonitor: DeviceVolumeMonitor
@@ -10,6 +18,9 @@ struct MenuBarPopupView: View {
 
     /// Track which app has its EQ panel expanded (only one at a time)
     @State private var expandedEQAppID: pid_t?
+
+    /// Tracked content height for animated ScrollView sizing
+    @State private var appsContentHeight: CGFloat = 200
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
@@ -97,48 +108,67 @@ struct MenuBarPopupView: View {
         SectionHeader(title: "Apps")
             .padding(.bottom, DesignTokens.Spacing.xs)
 
-        ScrollView {
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                ForEach(audioEngine.apps) { app in
-                    if let deviceUID = audioEngine.getDeviceUID(for: app) {
-                        AppRowWithLevelPolling(
-                            app: app,
-                            volume: audioEngine.getVolume(for: app),
-                            isMuted: audioEngine.getMute(for: app),
-                            devices: audioEngine.outputDevices,
-                            selectedDeviceUID: deviceUID,
-                            getAudioLevel: { audioEngine.getAudioLevel(for: app) },
-                            onVolumeChange: { volume in
-                                audioEngine.setVolume(for: app, to: volume)
-                            },
-                            onMuteChange: { muted in
-                                audioEngine.setMute(for: app, to: muted)
-                            },
-                            onDeviceSelected: { newDeviceUID in
-                                audioEngine.setDevice(for: app, deviceUID: newDeviceUID)
-                            },
-                            eqSettings: audioEngine.getEQSettings(for: app),
-                            onEQChange: { settings in
-                                audioEngine.setEQSettings(settings, for: app)
-                            },
-                            isEQExpanded: expandedEQAppID == app.id,
-                            onEQToggle: {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    if expandedEQAppID == app.id {
-                                        expandedEQAppID = nil
-                                    } else {
-                                        expandedEQAppID = app.id
+        ScrollViewReader { scrollProxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                    ForEach(audioEngine.apps) { app in
+                        if let deviceUID = audioEngine.getDeviceUID(for: app) {
+                            AppRowWithLevelPolling(
+                                app: app,
+                                volume: audioEngine.getVolume(for: app),
+                                isMuted: audioEngine.getMute(for: app),
+                                devices: audioEngine.outputDevices,
+                                selectedDeviceUID: deviceUID,
+                                getAudioLevel: { audioEngine.getAudioLevel(for: app) },
+                                onVolumeChange: { volume in
+                                    audioEngine.setVolume(for: app, to: volume)
+                                },
+                                onMuteChange: { muted in
+                                    audioEngine.setMute(for: app, to: muted)
+                                },
+                                onDeviceSelected: { newDeviceUID in
+                                    audioEngine.setDevice(for: app, deviceUID: newDeviceUID)
+                                },
+                                eqSettings: audioEngine.getEQSettings(for: app),
+                                onEQChange: { settings in
+                                    audioEngine.setEQSettings(settings, for: app)
+                                },
+                                isEQExpanded: expandedEQAppID == app.id,
+                                onEQToggle: {
+                                    let isExpanding = expandedEQAppID != app.id
+                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                        if expandedEQAppID == app.id {
+                                            expandedEQAppID = nil
+                                        } else {
+                                            expandedEQAppID = app.id
+                                        }
+                                        // Scroll in same animation transaction
+                                        if isExpanding {
+                                            scrollProxy.scrollTo(app.id, anchor: .top)
+                                        }
                                     }
                                 }
-                            }
-                        )
+                            )
+                            .id(app.id)
+                        }
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.preference(key: ContentHeightKey.self, value: geo.size.height)
+                    }
+                )
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(height: min(appsContentHeight, DesignTokens.Dimensions.maxScrollHeight + 150))
+            .onPreferenceChange(ContentHeightKey.self) { height in
+                // Animate the ScrollView height change
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                    appsContentHeight = height
+                }
+            }
         }
-        .scrollBounceBehavior(.basedOnSize)
-        .frame(minHeight: min(CGFloat(audioEngine.apps.count) * 44, 180), maxHeight: DesignTokens.Dimensions.maxScrollHeight)
     }
 
     // MARK: - Helpers
