@@ -519,6 +519,11 @@ final class ProcessTapController {
             rampCoefficient = 1 - exp(-1 / (Float(deviceSampleRate) * rampTimeSeconds))
         }
 
+        // Update EQ coefficients for new device sample rate
+        if let deviceSampleRate = try? aggregateDeviceID.readNominalSampleRate() {
+            eqProcessor?.updateSampleRate(deviceSampleRate)
+        }
+
         // Transfer volume state from secondary to primary (prevents volume jump)
         _primaryCurrentVolume = _secondaryCurrentVolume
         _secondaryCurrentVolume = 0
