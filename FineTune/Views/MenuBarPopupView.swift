@@ -61,6 +61,7 @@ struct MenuBarPopupView: View {
         .padding(DesignTokens.Spacing.lg)
         .frame(width: DesignTokens.Dimensions.popupWidth)
         .darkGlassBackground()
+        .environment(\.colorScheme, .dark)
         .onAppear {
             updateSortedDevices()
         }
