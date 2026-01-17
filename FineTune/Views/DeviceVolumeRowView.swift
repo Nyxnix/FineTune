@@ -41,7 +41,7 @@ struct DeviceVolumeRowView: View {
                 }
             } label: {
                 Image(systemName: isDefault ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(isDefault ? .blue : .secondary)
+                    .foregroundStyle(isDefault ? DesignTokens.Colors.defaultDevice : .secondary)
             }
             .buttonStyle(.plain)
             .help(isDefault ? "Current default output" : "Set as default output device")
@@ -67,7 +67,7 @@ struct DeviceVolumeRowView: View {
                 onMuteToggle()
             } label: {
                 Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    .foregroundStyle(isMuted ? .red : .secondary)
+                    .foregroundStyle(isMuted ? DesignTokens.Colors.mutedIndicator : .secondary)
             }
             .buttonStyle(.plain)
             .help(isMuted ? "Unmute" : "Mute")
@@ -81,7 +81,7 @@ struct DeviceVolumeRowView: View {
                 }
             )
             .frame(minWidth: 120)
-            .tint(.white.opacity(0.7))
+            .tint(DesignTokens.Colors.sliderFill)
             .opacity(isMuted ? 0.5 : 1.0)
             .onChange(of: sliderValue) { _, newValue in
                 // Auto-unmute when slider is moved while muted

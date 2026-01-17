@@ -1,14 +1,6 @@
 // FineTune/Views/MenuBarPopupView.swift
 import SwiftUI
 
-/// PreferenceKey for tracking ScrollView content height
-private struct ContentHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
 struct MenuBarPopupView: View {
     @Bindable var audioEngine: AudioEngine
     @Bindable var deviceVolumeMonitor: DeviceVolumeMonitor
@@ -19,35 +11,27 @@ struct MenuBarPopupView: View {
     /// Track which app has its EQ panel expanded (only one at a time)
     @State private var expandedEQAppID: pid_t?
 
-    /// Tracked content height for animated ScrollView sizing
-    @State private var appsContentHeight: CGFloat = 200
+    /// Debounce EQ toggle to prevent rapid clicks during animation
+    @State private var isEQAnimating = false
+
+    /// Track popup visibility to pause VU meter polling when hidden
+    @State private var isPopupVisible = true
+
+    // MARK: - Scroll Thresholds
+
+    /// Number of devices before scroll kicks in
+    private let deviceScrollThreshold = 4
+    /// Max height for devices scroll area
+    private let deviceScrollHeight: CGFloat = 160
+    /// Number of apps before scroll kicks in
+    private let appScrollThreshold = 5
+    /// Max height for apps scroll area
+    private let appScrollHeight: CGFloat = 220
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
             // Output Devices section
-            SectionHeader(title: "Output Devices")
-                .padding(.bottom, DesignTokens.Spacing.xs)
-
-            VStack(spacing: DesignTokens.Spacing.xs) {
-                ForEach(sortedDevices) { device in
-                    DeviceRow(
-                        device: device,
-                        isDefault: device.id == deviceVolumeMonitor.defaultDeviceID,
-                        volume: deviceVolumeMonitor.volumes[device.id] ?? 1.0,
-                        isMuted: deviceVolumeMonitor.muteStates[device.id] ?? false,
-                        onSetDefault: {
-                            deviceVolumeMonitor.setDefaultDevice(device.id)
-                        },
-                        onVolumeChange: { volume in
-                            deviceVolumeMonitor.setVolume(for: device.id, to: volume)
-                        },
-                        onMuteToggle: {
-                            let currentMute = deviceVolumeMonitor.muteStates[device.id] ?? false
-                            deviceVolumeMonitor.setMute(for: device.id, to: !currentMute)
-                        }
-                    )
-                }
-            }
+            devicesSection
 
             Divider()
                 .padding(.vertical, DesignTokens.Spacing.xs)
@@ -63,12 +47,16 @@ struct MenuBarPopupView: View {
                 .padding(.vertical, DesignTokens.Spacing.xs)
 
             // Quit button
-            Button("Quit FineTune") {
-                NSApplication.shared.terminate(nil)
+            HStack {
+                Spacer()
+                Button("Quit FineTune") {
+                    NSApplication.shared.terminate(nil)
+                }
+                .buttonStyle(.plain)
+                .font(DesignTokens.Typography.caption)
+                .foregroundStyle(DesignTokens.Colors.textSecondary)
+                .glassButtonStyle()
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(DesignTokens.Colors.textTertiary)
-            .font(DesignTokens.Typography.caption)
         }
         .padding(DesignTokens.Spacing.lg)
         .frame(width: DesignTokens.Dimensions.popupWidth)
@@ -82,9 +70,54 @@ struct MenuBarPopupView: View {
         .onChange(of: deviceVolumeMonitor.defaultDeviceID) { _, _ in
             updateSortedDevices()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            isPopupVisible = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+            isPopupVisible = false
+        }
     }
 
     // MARK: - Subviews
+
+    @ViewBuilder
+    private var devicesSection: some View {
+        SectionHeader(title: "Output Devices")
+            .padding(.bottom, DesignTokens.Spacing.xs)
+
+        if sortedDevices.count > deviceScrollThreshold {
+            ScrollView {
+                devicesContent
+            }
+            .scrollIndicators(.never)
+            .frame(height: deviceScrollHeight)
+        } else {
+            devicesContent
+        }
+    }
+
+    private var devicesContent: some View {
+        VStack(spacing: DesignTokens.Spacing.xs) {
+            ForEach(sortedDevices) { device in
+                DeviceRow(
+                    device: device,
+                    isDefault: device.id == deviceVolumeMonitor.defaultDeviceID,
+                    volume: deviceVolumeMonitor.volumes[device.id] ?? 1.0,
+                    isMuted: deviceVolumeMonitor.muteStates[device.id] ?? false,
+                    onSetDefault: {
+                        deviceVolumeMonitor.setDefaultDevice(device.id)
+                    },
+                    onVolumeChange: { volume in
+                        deviceVolumeMonitor.setVolume(for: device.id, to: volume)
+                    },
+                    onMuteToggle: {
+                        let currentMute = deviceVolumeMonitor.muteStates[device.id] ?? false
+                        deviceVolumeMonitor.setMute(for: device.id, to: !currentMute)
+                    }
+                )
+            }
+        }
+    }
 
     @ViewBuilder
     private var emptyStateView: some View {
@@ -108,70 +141,78 @@ struct MenuBarPopupView: View {
         SectionHeader(title: "Apps")
             .padding(.bottom, DesignTokens.Spacing.xs)
 
+        // ScrollViewReader needed for EQ expand scroll-to behavior
         ScrollViewReader { scrollProxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                    ForEach(audioEngine.apps) { app in
-                        if let deviceUID = audioEngine.getDeviceUID(for: app) {
-                            AppRowWithLevelPolling(
-                                app: app,
-                                volume: audioEngine.getVolume(for: app),
-                                isMuted: audioEngine.getMute(for: app),
-                                devices: audioEngine.outputDevices,
-                                selectedDeviceUID: deviceUID,
-                                getAudioLevel: { audioEngine.getAudioLevel(for: app) },
-                                onVolumeChange: { volume in
-                                    audioEngine.setVolume(for: app, to: volume)
-                                },
-                                onMuteChange: { muted in
-                                    audioEngine.setMute(for: app, to: muted)
-                                },
-                                onDeviceSelected: { newDeviceUID in
-                                    audioEngine.setDevice(for: app, deviceUID: newDeviceUID)
-                                },
-                                onAppActivate: {
-                                    activateApp(pid: app.id, bundleID: app.bundleID)
-                                },
-                                eqSettings: audioEngine.getEQSettings(for: app),
-                                onEQChange: { settings in
-                                    audioEngine.setEQSettings(settings, for: app)
-                                },
-                                isEQExpanded: expandedEQAppID == app.id,
-                                onEQToggle: {
-                                    let isExpanding = expandedEQAppID != app.id
-                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                        if expandedEQAppID == app.id {
-                                            expandedEQAppID = nil
-                                        } else {
-                                            expandedEQAppID = app.id
-                                        }
-                                        // Scroll in same animation transaction
-                                        if isExpanding {
-                                            scrollProxy.scrollTo(app.id, anchor: .top)
-                                        }
-                                    }
-                                }
-                            )
-                            .id(app.id)
-                        }
-                    }
+            if audioEngine.apps.count > appScrollThreshold {
+                ScrollView {
+                    appsContent(scrollProxy: scrollProxy)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    GeometryReader { geo in
-                        Color.clear.preference(key: ContentHeightKey.self, value: geo.size.height)
-                    }
-                )
+                .scrollIndicators(.never)
+                .frame(height: appScrollHeight)
+            } else {
+                appsContent(scrollProxy: scrollProxy)
             }
-            .scrollBounceBehavior(.basedOnSize)
-            .frame(height: min(appsContentHeight, DesignTokens.Dimensions.maxScrollHeight + 150))
-            .onPreferenceChange(ContentHeightKey.self) { height in
-                // Animate the ScrollView height change
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    appsContentHeight = height
+        }
+    }
+
+    private func appsContent(scrollProxy: ScrollViewProxy) -> some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+            ForEach(audioEngine.apps) { app in
+                if let deviceUID = audioEngine.getDeviceUID(for: app) {
+                    AppRowWithLevelPolling(
+                        app: app,
+                        volume: audioEngine.getVolume(for: app),
+                        isMuted: audioEngine.getMute(for: app),
+                        devices: audioEngine.outputDevices,
+                        selectedDeviceUID: deviceUID,
+                        getAudioLevel: { audioEngine.getAudioLevel(for: app) },
+                        isPopupVisible: isPopupVisible,
+                        onVolumeChange: { volume in
+                            audioEngine.setVolume(for: app, to: volume)
+                        },
+                        onMuteChange: { muted in
+                            audioEngine.setMute(for: app, to: muted)
+                        },
+                        onDeviceSelected: { newDeviceUID in
+                            audioEngine.setDevice(for: app, deviceUID: newDeviceUID)
+                        },
+                        onAppActivate: {
+                            activateApp(pid: app.id, bundleID: app.bundleID)
+                        },
+                        eqSettings: audioEngine.getEQSettings(for: app),
+                        onEQChange: { settings in
+                            audioEngine.setEQSettings(settings, for: app)
+                        },
+                        isEQExpanded: expandedEQAppID == app.id,
+                        onEQToggle: {
+                            // Debounce: ignore clicks during animation
+                            guard !isEQAnimating else { return }
+                            isEQAnimating = true
+
+                            let isExpanding = expandedEQAppID != app.id
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                if expandedEQAppID == app.id {
+                                    expandedEQAppID = nil
+                                } else {
+                                    expandedEQAppID = app.id
+                                }
+                                // Scroll in same animation transaction
+                                if isExpanding {
+                                    scrollProxy.scrollTo(app.id, anchor: .top)
+                                }
+                            }
+
+                            // Re-enable after animation completes
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                                isEQAnimating = false
+                            }
+                        }
+                    )
+                    .id(app.id)
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Helpers
