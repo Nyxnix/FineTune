@@ -16,7 +16,7 @@ struct DropdownMenu<Item: Identifiable, Label: View, ItemContent: View>: View wh
     @State private var isButtonHovered = false
 
     // Configuration
-    private let itemHeight: CGFloat = 20
+    private let itemHeight: CGFloat = 26
     private let cornerRadius: CGFloat = 8
     private let animationDuration: Double = 0.15
 
@@ -112,7 +112,7 @@ private struct DropdownContentView<Item: Identifiable, ItemContent: View>: View 
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            LazyVStack(spacing: 1) {
+            LazyVStack(spacing: 2) {
                 ForEach(items) { item in
                     DropdownMenuItem(
                         item: item,
@@ -124,7 +124,8 @@ private struct DropdownContentView<Item: Identifiable, ItemContent: View>: View 
                     .id(item.id)
                 }
             }
-            .padding(5)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 5)
             .scrollTargetLayout()
         }
         .scrollPosition(id: .constant(selectedItem?.id), anchor: .center)
@@ -162,7 +163,7 @@ private struct DropdownMenuItem<Item: Identifiable, ItemContent: View>: View whe
                 .frame(height: itemHeight)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
-                    RoundedRectangle(cornerRadius: 4)
+                    RoundedRectangle(cornerRadius: 5)
                         .fill(isHovered ? Color.accentColor.opacity(0.15) : Color.clear)
                 )
                 .contentShape(Rectangle())

@@ -78,7 +78,7 @@ struct DevicePicker: View {
             HStack(spacing: DesignTokens.Spacing.xs) {
                 if case .systemAudio = selected {
                     Image(systemName: "globe")
-                        .font(.system(size: 14))
+                        .font(.system(size: 13))
                 } else if let icon = selected?.icon {
                     Image(nsImage: icon)
                         .resizable()
@@ -86,7 +86,7 @@ struct DevicePicker: View {
                         .frame(width: 16, height: 16)
                 } else {
                     Image(systemName: "speaker.wave.2")
-                        .font(.system(size: 14))
+                        .font(.system(size: 13))
                 }
                 Text(selected?.name ?? "Select")
                     .lineLimit(1)
@@ -97,13 +97,14 @@ struct DevicePicker: View {
                 switch item {
                 case .systemAudio:
                     Image(systemName: "globe")
-                        .font(.system(size: 14))
+                        .font(.system(size: 13))
                         .frame(width: 16)
-                    VStack(alignment: .leading, spacing: 2) {
+                        .foregroundStyle(DesignTokens.Colors.textSecondary)
+                    VStack(alignment: .leading, spacing: 1) {
                         Text("System Audio")
                         Text("Follows macOS default")
-                            .font(.system(size: 10))
-                            .foregroundStyle(DesignTokens.Colors.textSecondary)
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundStyle(DesignTokens.Colors.textTertiary)
                     }
                 case .device(let device):
                     if let icon = device.icon {
@@ -120,14 +121,14 @@ struct DevicePicker: View {
                     // Show star for current macOS default device
                     if device.uid == defaultDeviceUID {
                         Image(systemName: "star.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(DesignTokens.Colors.textSecondary)
+                            .font(.system(size: 9))
+                            .foregroundStyle(DesignTokens.Colors.textTertiary)
                     }
                 }
                 Spacer()
                 if isSelected {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(.accentColor)
                 }
             }
