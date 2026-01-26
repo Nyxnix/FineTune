@@ -14,7 +14,7 @@ final class VolumeState {
     }
 
     func getVolume(for pid: pid_t) -> Float {
-        volumes[pid] ?? 1.0
+        volumes[pid] ?? (settingsManager?.appSettings.defaultNewAppVolume ?? 1.0)
     }
 
     func setVolume(for pid: pid_t, to volume: Float, identifier: String? = nil) {

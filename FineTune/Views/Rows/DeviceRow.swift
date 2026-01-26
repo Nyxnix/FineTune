@@ -97,9 +97,14 @@ struct DeviceRow: View {
                 }
             }
 
-            // Volume percentage
-            Text("\(Int(sliderValue * 100))%")
-                .percentageStyle()
+            // Editable volume percentage
+            EditablePercentage(
+                percentage: Binding(
+                    get: { Int(round(sliderValue * 100)) },
+                    set: { sliderValue = Double($0) / 100.0 }
+                ),
+                range: 0...100
+            )
         }
         .frame(height: DesignTokens.Dimensions.rowContentHeight)
         .hoverableRow()

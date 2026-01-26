@@ -2,52 +2,38 @@
 import Foundation
 
 /// Utility for converting between slider position and audio gain.
-/// Uses dB-based curve: 50% slider = 0dB = unity gain (passthrough).
+/// Linear mapping: 50% slider = 100% gain (unity), visual consistency over audio precision.
 enum VolumeMapping {
-    /// Minimum dB for slider at 0% (effectively -infinity, but use finite value)
-    private static let minDB: Float = -60
-
-    /// Maximum dB for slider at 100% (+6dB = 2x amplitude)
-    private static let maxDB: Float = 6
-
     /// Convert slider position (0-1) to linear gain
-    /// Uses dB-based curve: 50% slider = 0dB = unity gain
-    /// - Parameter slider: Normalized slider position 0.0 to 1.0
-    /// - Returns: Linear gain multiplier (0 to ~2.0)
-    static func sliderToGain(_ slider: Double) -> Float {
-        guard slider > 0 else { return 0 }
-
-        // Map slider 0-1 to dB range, with 0.5 = 0dB (unity)
-        let dB: Float
+    /// Linear mapping: 50% slider = unity gain (1.0)
+    /// - Parameters:
+    ///   - slider: Normalized slider position 0.0 to 1.0
+    ///   - maxBoost: Maximum volume multiplier (e.g., 2.0 = 200%, 4.0 = 400%)
+    /// - Returns: Linear gain multiplier (0 to maxBoost)
+    static func sliderToGain(_ slider: Double, maxBoost: Float = 2.0) -> Float {
         if slider <= 0.5 {
-            // 0 to 0.5 maps to minDB to 0dB
-            let t = Float(slider) / 0.5
-            dB = minDB + t * (0 - minDB)
+            // 0-50% slider → 0-100% gain (linear attenuation)
+            return Float(slider * 2)
         } else {
-            // 0.5 to 1.0 maps to 0dB to maxDB
-            let t = (Float(slider) - 0.5) / 0.5
-            dB = t * maxDB
+            // 50-100% slider → 100%-maxBoost (linear boost)
+            let t = (slider - 0.5) / 0.5
+            return 1.0 + Float(t) * (maxBoost - 1.0)
         }
-
-        return pow(10, dB / 20)
     }
 
     /// Convert linear gain to slider position (0-1)
-    /// - Parameter gain: Linear gain multiplier
+    /// - Parameters:
+    ///   - gain: Linear gain multiplier
+    ///   - maxBoost: Maximum volume multiplier (e.g., 2.0 = 200%, 4.0 = 400%)
     /// - Returns: Normalized slider position 0.0 to 1.0
-    static func gainToSlider(_ gain: Float) -> Double {
-        guard gain > 0 else { return 0 }
-
-        let dB = 20 * log10(gain)
-
-        if dB <= 0 {
-            // Map minDB to 0dB → slider 0 to 0.5
-            let t = (dB - minDB) / (0 - minDB)
-            return Double(max(0, t * 0.5))
+    static func gainToSlider(_ gain: Float, maxBoost: Float = 2.0) -> Double {
+        if gain <= 1.0 {
+            // 0-100% gain → 0-50% slider
+            return Double(gain * 0.5)
         } else {
-            // Map 0dB to maxDB → slider 0.5 to 1.0
-            let t = dB / maxDB
-            return Double(min(1, 0.5 + t * 0.5))
+            // 100%-maxBoost → 50-100% slider
+            let t = (gain - 1.0) / (maxBoost - 1.0)
+            return 0.5 + Double(t) * 0.5
         }
     }
 }

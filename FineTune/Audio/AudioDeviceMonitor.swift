@@ -17,6 +17,9 @@ final class AudioDeviceMonitor {
     /// Called immediately when device disappears (passes UID and name)
     var onDeviceDisconnected: ((_ uid: String, _ name: String) -> Void)?
 
+    /// Called when a device appears (passes UID and name)
+    var onDeviceConnected: ((_ uid: String, _ name: String) -> Void)?
+
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FineTune", category: "AudioDeviceMonitor")
 
     private var deviceListListenerBlock: AudioObjectPropertyListenerBlock?
@@ -128,11 +131,21 @@ final class AudioDeviceMonitor {
 
         let currentUIDs = knownDeviceUIDs
 
+        // Detect disconnected devices
         let disconnectedUIDs = previousUIDs.subtracting(currentUIDs)
         for uid in disconnectedUIDs {
             let name = deviceNames[uid] ?? uid
             logger.info("Device disconnected: \(name) (\(uid))")
             onDeviceDisconnected?(uid, name)
+        }
+
+        // Detect connected devices
+        let connectedUIDs = currentUIDs.subtracting(previousUIDs)
+        for uid in connectedUIDs {
+            if let device = devicesByUID[uid] {
+                logger.info("Device connected: \(device.name) (\(uid))")
+                onDeviceConnected?(uid, device.name)
+            }
         }
     }
 

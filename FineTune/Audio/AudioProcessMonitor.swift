@@ -11,6 +11,47 @@ final class AudioProcessMonitor {
 
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FineTune", category: "AudioProcessMonitor")
 
+    /// Bundle ID prefixes for system daemons that should be filtered from the apps list
+    /// These produce system audio (Siri, alerts, notifications) and shouldn't appear as user apps
+    private static let systemDaemonPrefixes: [String] = [
+        "com.apple.siri",
+        "com.apple.Siri",
+        "com.apple.assistant",
+        "com.apple.audio",
+        "com.apple.coreaudio",
+        "com.apple.mediaremote",
+        "com.apple.accessibility.heard",
+        "com.apple.hearingd",
+        "com.apple.voicebankingd",
+        "com.apple.systemsound",
+    ]
+
+    /// Process names for system daemons (fallback when bundle ID is nil or different format)
+    private static let systemDaemonNames: [String] = [
+        "systemsoundserverd",
+        "systemsoundserv",
+        "coreaudiod",
+        "audiomxd",
+    ]
+
+    /// Returns true if the bundle ID or process name indicates a system daemon that should be filtered
+    private func isSystemDaemon(bundleID: String?, name: String) -> Bool {
+        // Check bundle ID prefixes
+        if let bundleID {
+            if Self.systemDaemonPrefixes.contains(where: { bundleID.hasPrefix($0) }) {
+                return true
+            }
+        }
+
+        // Check process name (handles nil bundleID and format variations)
+        let lowercaseName = name.lowercased()
+        if Self.systemDaemonNames.contains(where: { lowercaseName.hasPrefix($0) }) {
+            return true
+        }
+
+        return false
+    }
+
     // Property listeners
     private var processListListenerBlock: AudioObjectPropertyListenerBlock?
     private var processListenerBlocks: [AudioObjectID: AudioObjectPropertyListenerBlock] = [:]
@@ -141,6 +182,9 @@ final class AudioProcessMonitor {
                     ?? NSImage(systemSymbolName: "app.fill", accessibilityDescription: nil)
                     ?? NSImage()
                 let bundleID = resolvedApp?.bundleIdentifier ?? objectID.readProcessBundleID()
+
+                // Skip system daemons (siri, coreaudio, etc.) - they shouldn't appear in the apps list
+                if isSystemDaemon(bundleID: bundleID, name: name) { continue }
 
                 let app = AudioApp(
                     id: pid,

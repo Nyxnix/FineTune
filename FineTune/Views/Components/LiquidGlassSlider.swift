@@ -53,13 +53,17 @@ struct LiquidGlassSlider: View {
                 .frame(maxHeight: .infinity)
                 .allowsHitTesting(false)
 
-                // Unity marker at 50%
+                // Unity marker at 50% (horizontally centered, vertically centered via frame)
                 if showUnityMarker {
-                    Rectangle()
-                        .fill(DesignTokens.Colors.unityMarker)
-                        .frame(width: 1.5, height: 12)
-                        .position(x: geo.size.width / 2, y: geo.size.height / 2)
-                        .allowsHitTesting(false)
+                    HStack {
+                        Spacer()
+                        Rectangle()
+                            .fill(DesignTokens.Colors.unityMarker)
+                            .frame(width: 1.5, height: 8)
+                        Spacer()
+                    }
+                    .frame(maxHeight: .infinity)
+                    .allowsHitTesting(false)
                 }
 
                 // Native SwiftUI Slider - gets Liquid Glass thumb on macOS 26+

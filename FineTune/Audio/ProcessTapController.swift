@@ -174,11 +174,15 @@ final class ProcessTapController {
             kAudioAggregateDeviceNameKey: "FineTune-\(app.id)",
             kAudioAggregateDeviceUIDKey: aggregateUID,
             kAudioAggregateDeviceMainSubDeviceKey: outputUID,
+            kAudioAggregateDeviceClockDeviceKey: outputUID,  // USB devices need explicit clock source
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
             kAudioAggregateDeviceTapAutoStartKey: true,
             kAudioAggregateDeviceSubDeviceListKey: [
-                [kAudioSubDeviceUIDKey: outputUID]
+                [
+                    kAudioSubDeviceUIDKey: outputUID,
+                    kAudioSubDeviceDriftCompensationKey: false  // Clock source doesn't need drift comp
+                ]
             ],
             kAudioAggregateDeviceTapListKey: [
                 [
@@ -193,6 +197,13 @@ final class ProcessTapController {
         guard err == noErr else {
             cleanupPartialActivation()
             throw NSError(domain: NSOSStatusErrorDomain, code: Int(err), userInfo: [NSLocalizedDescriptionKey: "Failed to create aggregate device: \(err)"])
+        }
+
+        // Wait for aggregate device to become ready before querying properties
+        // Uses CFRunLoopRunInMode to process HAL events during wait
+        guard aggregateDeviceID.waitUntilReady(timeout: 2.0) else {
+            cleanupPartialActivation()
+            throw NSError(domain: "ProcessTapController", code: -1, userInfo: [NSLocalizedDescriptionKey: "Aggregate device not ready within timeout"])
         }
 
         logger.debug("Created aggregate device #\(self.aggregateDeviceID)")
@@ -412,11 +423,15 @@ final class ProcessTapController {
             kAudioAggregateDeviceNameKey: "FineTune-\(app.id)-secondary",
             kAudioAggregateDeviceUIDKey: aggregateUID,
             kAudioAggregateDeviceMainSubDeviceKey: outputUID,
+            kAudioAggregateDeviceClockDeviceKey: outputUID,  // USB devices need explicit clock source
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
             kAudioAggregateDeviceTapAutoStartKey: true,
             kAudioAggregateDeviceSubDeviceListKey: [
-                [kAudioSubDeviceUIDKey: outputUID]
+                [
+                    kAudioSubDeviceUIDKey: outputUID,
+                    kAudioSubDeviceDriftCompensationKey: false  // Clock source doesn't need drift comp
+                ]
             ],
             kAudioAggregateDeviceTapListKey: [
                 [
@@ -434,6 +449,18 @@ final class ProcessTapController {
             throw NSError(domain: NSOSStatusErrorDomain, code: Int(err),
                           userInfo: [NSLocalizedDescriptionKey: "Failed to create secondary aggregate: \(err)"])
         }
+
+        // Wait for secondary aggregate to become ready
+        // Critical for Bluetooth devices which may have variable initialization time
+        guard secondaryAggregateID.waitUntilReady(timeout: 2.0) else {
+            AudioHardwareDestroyAggregateDevice(secondaryAggregateID)
+            AudioHardwareDestroyProcessTap(secondaryTapID)
+            secondaryAggregateID = .unknown
+            secondaryTapID = .unknown
+            throw NSError(domain: "ProcessTapController", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Secondary aggregate device not ready within timeout"])
+        }
+
         logger.debug("[CROSSFADE] Created secondary aggregate #\(self.secondaryAggregateID)")
 
         // Initialize sample-accurate crossfade timing from secondary device sample rate
@@ -631,11 +658,15 @@ final class ProcessTapController {
             kAudioAggregateDeviceNameKey: "FineTune-\(app.id)",
             kAudioAggregateDeviceUIDKey: aggregateUID,
             kAudioAggregateDeviceMainSubDeviceKey: outputUID,
+            kAudioAggregateDeviceClockDeviceKey: outputUID,  // USB devices need explicit clock source
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
             kAudioAggregateDeviceTapAutoStartKey: true,
             kAudioAggregateDeviceSubDeviceListKey: [
-                [kAudioSubDeviceUIDKey: outputUID]
+                [
+                    kAudioSubDeviceUIDKey: outputUID,
+                    kAudioSubDeviceDriftCompensationKey: false  // Clock source doesn't need drift comp
+                ]
             ],
             kAudioAggregateDeviceTapListKey: [
                 [
@@ -652,6 +683,14 @@ final class ProcessTapController {
             AudioHardwareDestroyProcessTap(newTapID)
             throw NSError(domain: NSOSStatusErrorDomain, code: Int(err),
                           userInfo: [NSLocalizedDescriptionKey: "Failed to create aggregate: \(err)"])
+        }
+
+        // Wait for aggregate to become ready (fallback path)
+        guard newAggregateID.waitUntilReady(timeout: 2.0) else {
+            AudioHardwareDestroyAggregateDevice(newAggregateID)
+            AudioHardwareDestroyProcessTap(newTapID)
+            throw NSError(domain: "ProcessTapController", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Aggregate device not ready within timeout"])
         }
 
         // STEP 3: Create and start IO proc for new aggregate
@@ -718,6 +757,7 @@ final class ProcessTapController {
     /// See: https://developer.apple.com/library/archive/qa/qa1467/_index.html
     private func processAudio(_ inputBufferList: UnsafePointer<AudioBufferList>, to outputBufferList: UnsafeMutablePointer<AudioBufferList>) {
         let outputBuffers = UnsafeMutableAudioBufferListPointer(outputBufferList)
+        let inputBuffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputBufferList))
 
         // Check silence flag first (atomic Bool read)
         // When silencing for device switch, output zeros to prevent clicks
@@ -729,8 +769,6 @@ final class ProcessTapController {
             }
             return
         }
-
-        let inputBuffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputBufferList))
 
         // Track peak level for VU meter (RT-safe: simple max tracking + smoothing)
         // Always measure INPUT signal so VU shows source activity even when muted
@@ -782,41 +820,71 @@ final class ProcessTapController {
         }
 
         // Copy input to output with ramped gain and soft limiting
-        for (inputBuffer, outputBuffer) in zip(inputBuffers, outputBuffers) {
-            guard let inputData = inputBuffer.mData,
-                  let outputData = outputBuffer.mData else { continue }
+        //
+        // Buffer routing handles all device configurations:
+        // - Built-in/AirPods: inputCount == outputCount, direct 1:1 mapping
+        // - USB with mic (MOTU M2, etc.): inputCount > outputCount, tap at END
+        // - Multi-channel output: inputCount < outputCount, silence extras
+        //
+        // Key insight: Process tap (stereoMixdownOfProcesses) always produces
+        // stereo at the END of the input buffer list.
+
+        let inputBufferCount = inputBuffers.count
+        let outputBufferCount = outputBuffers.count
+
+        for outputIndex in 0..<outputBufferCount {
+            let outputBuffer = outputBuffers[outputIndex]
+            guard let outputData = outputBuffer.mData else { continue }
+
+            // Calculate which input buffer to use:
+            // - If inputCount > outputCount: tap is at END, offset by difference
+            // - If inputCount <= outputCount: direct mapping, silence extras
+            let inputIndex: Int
+            if inputBufferCount > outputBufferCount {
+                // USB with mic inputs: tap buffers are at the END
+                // e.g., [mic_L, mic_R, tap_L, tap_R] for MOTU M2 (4 in, 2 out)
+                inputIndex = inputBufferCount - outputBufferCount + outputIndex
+            } else {
+                // Built-in speakers or multi-channel output: direct mapping
+                inputIndex = outputIndex
+            }
+
+            // Check if we have a corresponding input buffer
+            guard inputIndex < inputBufferCount else {
+                // No input for this output - silence it (multi-channel output case)
+                memset(outputData, 0, Int(outputBuffer.mDataByteSize))
+                continue
+            }
+
+            let inputBuffer = inputBuffers[inputIndex]
+            guard let inputData = inputBuffer.mData else {
+                memset(outputData, 0, Int(outputBuffer.mDataByteSize))
+                continue
+            }
 
             let inputSamples = inputData.assumingMemoryBound(to: Float.self)
             let outputSamples = outputData.assumingMemoryBound(to: Float.self)
             let sampleCount = Int(inputBuffer.mDataByteSize) / MemoryLayout<Float>.size
 
+            // Apply volume ramping and soft limiting
             for i in 0..<sampleCount {
-                // Per-sample volume ramping (one-pole lowpass)
                 currentVol += (targetVol - currentVol) * rampCoefficient
-
-                // Apply gain with crossfade multiplier
-                // During crossfade, DON'T apply compensation to primary (it's on old device)
-                // Compensation is only correct for the new device (secondary tap)
                 let effectiveCompensation: Float = _isCrossfading ? 1.0 : _deviceVolumeCompensation
                 var sample = inputSamples[i] * currentVol * crossfadeMultiplier * effectiveCompensation
-
-                // Soft-knee limiter only when boosting (saves CPU at normal volumes)
                 if targetVol > 1.0 {
                     sample = softLimit(sample)
                 }
-
                 outputSamples[i] = sample
             }
 
-            // Apply EQ processing (after volume, before output)
-            // Skip EQ during crossfade - 50ms flat EQ is imperceptible, avoids all EQ state glitches
+            // Apply EQ (skip during crossfade to prevent glitches)
             if let eqProcessor = eqProcessor, !_isCrossfading {
-                let frameCount = sampleCount / 2  // Stereo frames
-                eqProcessor.process(
-                    input: outputSamples,
-                    output: outputSamples,
-                    frameCount: frameCount
-                )
+                // Frame count depends on buffer format:
+                // - Interleaved (mNumberChannels > 1): samples / channels
+                // - Non-interleaved (mNumberChannels == 1): samples = frames
+                let channels = Int(inputBuffer.mNumberChannels)
+                let frameCount = channels > 1 ? sampleCount / channels : sampleCount
+                eqProcessor.process(input: outputSamples, output: outputSamples, frameCount: frameCount)
             }
         }
 
@@ -887,38 +955,55 @@ final class ProcessTapController {
         }
 
         // Copy input to output with ramped gain and crossfade
-        for (inputBuffer, outputBuffer) in zip(inputBuffers, outputBuffers) {
-            guard let inputData = inputBuffer.mData,
-                  let outputData = outputBuffer.mData else { continue }
+        //
+        // Buffer routing handles all device configurations (same as primary):
+        // - Built-in/AirPods: inputCount == outputCount, direct 1:1 mapping
+        // - USB with mic (MOTU M2, etc.): inputCount > outputCount, tap at END
+        // - Multi-channel output: inputCount < outputCount, silence extras
+
+        let inputBufferCount = inputBuffers.count
+        let outputBufferCount = outputBuffers.count
+
+        for outputIndex in 0..<outputBufferCount {
+            let outputBuffer = outputBuffers[outputIndex]
+            guard let outputData = outputBuffer.mData else { continue }
+
+            // Calculate which input buffer to use (same logic as primary)
+            let inputIndex: Int
+            if inputBufferCount > outputBufferCount {
+                inputIndex = inputBufferCount - outputBufferCount + outputIndex
+            } else {
+                inputIndex = outputIndex
+            }
+
+            guard inputIndex < inputBufferCount else {
+                memset(outputData, 0, Int(outputBuffer.mDataByteSize))
+                continue
+            }
+
+            let inputBuffer = inputBuffers[inputIndex]
+            guard let inputData = inputBuffer.mData else {
+                memset(outputData, 0, Int(outputBuffer.mDataByteSize))
+                continue
+            }
 
             let inputSamples = inputData.assumingMemoryBound(to: Float.self)
             let outputSamples = outputData.assumingMemoryBound(to: Float.self)
             let sampleCount = Int(inputBuffer.mDataByteSize) / MemoryLayout<Float>.size
 
             for i in 0..<sampleCount {
-                // Per-sample volume ramping
                 currentVol += (targetVol - currentVol) * secondaryRampCoefficient
-
-                // Apply ramped gain with crossfade multiplier and device volume compensation
                 var sample = inputSamples[i] * currentVol * crossfadeMultiplier * _deviceVolumeCompensation
-
-                // Soft-knee limiter only when boosting (saves CPU at normal volumes)
                 if targetVol > 1.0 {
                     sample = softLimit(sample)
                 }
-
                 outputSamples[i] = sample
             }
 
-            // Apply EQ after crossfade completes (when this tap becomes the primary)
-            // Skip during crossfade to prevent glitches from mixing EQ states
             if let eqProcessor = eqProcessor, !_isCrossfading {
-                let frameCount = sampleCount / 2  // Stereo frames
-                eqProcessor.process(
-                    input: outputSamples,
-                    output: outputSamples,
-                    frameCount: frameCount
-                )
+                let channels = Int(inputBuffer.mNumberChannels)
+                let frameCount = channels > 1 ? sampleCount / channels : sampleCount
+                eqProcessor.process(input: outputSamples, output: outputSamples, frameCount: frameCount)
             }
         }
 

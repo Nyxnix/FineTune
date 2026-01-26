@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>FineTune Updates</title>
+    <link>https://github.com/ronitsingh10/FineTune</link>
+    <description>Most recent updates to FineTune</description>
+    <language>en</language>
+    <!--
+    Add new <item> entries here when releasing updates.
+    The release workflow will automatically update this file.
+
+    Template for new releases:
+    <item>
+      <title>Version X.X.X</title>
+      <sparkle:version>BUILD_NUMBER</sparkle:version>
+      <sparkle:shortVersionString>X.X.X</sparkle:shortVersionString>
+      <pubDate>Day, DD Mon YYYY HH:MM:SS +0000</pubDate>
+      <enclosure
+        url="https://github.com/ronitsingh10/FineTune/releases/download/vX.X.X/FineTune-X.X.X.dmg"
+        sparkle:edSignature="ED_SIGNATURE_HERE"
+        length="FILE_SIZE_BYTES"
+        type="application/octet-stream"/>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+    </item>
+    -->
+  </channel>
+</rss>
