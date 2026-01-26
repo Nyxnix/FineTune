@@ -6,13 +6,14 @@ import Combine
 /// Used in the Apps section
 struct AppRow: View {
     let app: AudioApp
-    let volume: Float  // Linear gain 0-2
+    let volume: Float  // Linear gain 0-maxVolumeBoost
     let audioLevel: Float
     let devices: [AudioDevice]
     let selectedDeviceUID: String
     let isFollowingDefault: Bool
     let defaultDeviceUID: String?
     let isMutedExternal: Bool  // Mute state from AudioEngine
+    let maxVolumeBoost: Float  // Maximum volume multiplier (e.g., 2.0 = 200%, 4.0 = 400%)
     let onVolumeChange: (Float) -> Void
     let onMuteChange: (Bool) -> Void
     let onDeviceSelected: (String) -> Void
@@ -23,8 +24,13 @@ struct AppRow: View {
     let isEQExpanded: Bool
     let onEQToggle: () -> Void
 
-    @State private var sliderValue: Double  // 0-1, log-mapped position
+    @State private var dragOverrideValue: Double?  // Only set while user is dragging
     @State private var isEditing = false
+
+    /// Slider value - computed from volume/maxBoost, or drag override while dragging
+    private var sliderValue: Double {
+        dragOverrideValue ?? VolumeMapping.gainToSlider(volume, maxBoost: maxVolumeBoost)
+    }
     @State private var isIconHovered = false
     @State private var isEQButtonHovered = false
     @State private var localEQSettings: EQSettings
@@ -55,6 +61,7 @@ struct AppRow: View {
         isFollowingDefault: Bool = true,
         defaultDeviceUID: String? = nil,
         isMuted: Bool = false,
+        maxVolumeBoost: Float = 2.0,
         onVolumeChange: @escaping (Float) -> Void,
         onMuteChange: @escaping (Bool) -> Void,
         onDeviceSelected: @escaping (String) -> Void,
@@ -73,6 +80,7 @@ struct AppRow: View {
         self.isFollowingDefault = isFollowingDefault
         self.defaultDeviceUID = defaultDeviceUID
         self.isMutedExternal = isMuted
+        self.maxVolumeBoost = maxVolumeBoost
         self.onVolumeChange = onVolumeChange
         self.onMuteChange = onMuteChange
         self.onDeviceSelected = onDeviceSelected
@@ -82,8 +90,6 @@ struct AppRow: View {
         self.onEQChange = onEQChange
         self.isEQExpanded = isEQExpanded
         self.onEQToggle = onEQToggle
-        // Convert linear gain to slider position
-        self._sliderValue = State(initialValue: VolumeMapping.gainToSlider(volume))
         // Initialize local EQ state for reactive UI updates
         self._localEQSettings = State(initialValue: eqSettings)
     }
@@ -121,9 +127,9 @@ struct AppRow: View {
                     // Mute button
                     MuteButton(isMuted: showMutedIcon) {
                         if showMutedIcon {
-                            // Unmute: restore to default if at 0
-                            if sliderValue == 0 {
-                                sliderValue = defaultUnmuteVolume
+                            // Unmute: restore to default volume if at 0
+                            if volume == 0 {
+                                onVolumeChange(1.0)  // Restore to unity (100%)
                             }
                             onMuteChange(false)
                         } else {
@@ -134,26 +140,44 @@ struct AppRow: View {
 
                     // Volume slider with unity marker (Liquid Glass)
                     LiquidGlassSlider(
-                        value: $sliderValue,
+                        value: Binding(
+                            get: { sliderValue },
+                            set: { newValue in
+                                dragOverrideValue = newValue
+                                let gain = VolumeMapping.sliderToGain(newValue, maxBoost: maxVolumeBoost)
+                                onVolumeChange(gain)
+                                // Auto-unmute when slider moved while muted
+                                if isMutedExternal {
+                                    onMuteChange(false)
+                                }
+                            }
+                        ),
                         showUnityMarker: true,
                         onEditingChanged: { editing in
                             isEditing = editing
+                            // Clear override when done editing - let computed value take over
+                            if !editing {
+                                dragOverrideValue = nil
+                            }
                         }
                     )
                     .frame(width: DesignTokens.Dimensions.sliderWidth)
                     .opacity(showMutedIcon ? 0.5 : 1.0)
-                    .onChange(of: sliderValue) { _, newValue in
-                        let gain = VolumeMapping.sliderToGain(newValue)
-                        onVolumeChange(gain)
-                        // Auto-unmute when slider moved while muted
-                        if isMutedExternal {
-                            onMuteChange(false)
-                        }
-                    }
 
-                    // Volume percentage (0-200% matching slider position)
-                    Text("\(Int(sliderValue * 200))%")
-                        .percentageStyle()
+                    // Editable volume percentage (100% = unity)
+                    EditablePercentage(
+                        percentage: Binding(
+                            get: {
+                                let gain = VolumeMapping.sliderToGain(sliderValue, maxBoost: maxVolumeBoost)
+                                return Int(round(gain * 100))
+                            },
+                            set: { newPercentage in
+                                let gain = Float(newPercentage) / 100.0
+                                onVolumeChange(gain)  // Update actual volume, computed sliderValue will follow
+                            }
+                        ),
+                        range: 0...Int(round(maxVolumeBoost * 100))
+                    )
 
                     // VU Meter (shows gray bars when muted or volume is 0)
                     VUMeter(level: audioLevel, isMuted: showMutedIcon)
@@ -214,11 +238,6 @@ struct AppRow: View {
             )
             .padding(.top, DesignTokens.Spacing.sm)
         }
-        .onChange(of: volume) { _, newValue in
-            // Only sync from external changes when user is NOT dragging
-            guard !isEditing else { return }
-            sliderValue = VolumeMapping.gainToSlider(newValue)
-        }
         .onChange(of: eqSettings) { _, newValue in
             // Sync from parent when external EQ settings change
             localEQSettings = newValue
@@ -237,6 +256,7 @@ struct AppRowWithLevelPolling: View {
     let selectedDeviceUID: String
     let isFollowingDefault: Bool
     let defaultDeviceUID: String?
+    let maxVolumeBoost: Float
     let getAudioLevel: () -> Float
     let isPopupVisible: Bool
     let onVolumeChange: (Float) -> Void
@@ -260,6 +280,7 @@ struct AppRowWithLevelPolling: View {
         selectedDeviceUID: String,
         isFollowingDefault: Bool = true,
         defaultDeviceUID: String? = nil,
+        maxVolumeBoost: Float = 2.0,
         getAudioLevel: @escaping () -> Float,
         isPopupVisible: Bool = true,
         onVolumeChange: @escaping (Float) -> Void,
@@ -279,6 +300,7 @@ struct AppRowWithLevelPolling: View {
         self.selectedDeviceUID = selectedDeviceUID
         self.isFollowingDefault = isFollowingDefault
         self.defaultDeviceUID = defaultDeviceUID
+        self.maxVolumeBoost = maxVolumeBoost
         self.getAudioLevel = getAudioLevel
         self.isPopupVisible = isPopupVisible
         self.onVolumeChange = onVolumeChange
@@ -302,6 +324,7 @@ struct AppRowWithLevelPolling: View {
             isFollowingDefault: isFollowingDefault,
             defaultDeviceUID: defaultDeviceUID,
             isMuted: isMuted,
+            maxVolumeBoost: maxVolumeBoost,
             onVolumeChange: onVolumeChange,
             onMuteChange: onMuteChange,
             onDeviceSelected: onDeviceSelected,

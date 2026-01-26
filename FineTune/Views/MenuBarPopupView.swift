@@ -4,6 +4,10 @@ import SwiftUI
 struct MenuBarPopupView: View {
     @Bindable var audioEngine: AudioEngine
     @Bindable var deviceVolumeMonitor: DeviceVolumeMonitor
+    @ObservedObject var updateManager: UpdateManager
+
+    /// Icon style that was applied at app launch (for restart-required detection)
+    let launchIconStyle: MenuBarIconStyle
 
     /// Memoized sorted devices - only recomputed when device list or default changes
     @State private var sortedDevices: [AudioDevice] = []
@@ -16,6 +20,15 @@ struct MenuBarPopupView: View {
 
     /// Track popup visibility to pause VU meter polling when hidden
     @State private var isPopupVisible = true
+
+    /// Track whether settings panel is open
+    @State private var isSettingsOpen = false
+
+    /// Debounce settings toggle to prevent rapid clicks during animation
+    @State private var isSettingsAnimating = false
+
+    /// Local copy of app settings for binding
+    @State private var localAppSettings: AppSettings = AppSettings()
 
     // MARK: - Scroll Thresholds
 
@@ -30,32 +43,36 @@ struct MenuBarPopupView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-            // Output Devices section
-            devicesSection
-
-            Divider()
-                .padding(.vertical, DesignTokens.Spacing.xs)
-
-            // Apps section
-            if audioEngine.apps.isEmpty {
-                emptyStateView
-            } else {
-                appsSection
-            }
-
-            Divider()
-                .padding(.vertical, DesignTokens.Spacing.xs)
-
-            // Quit button
+            // Header row - always visible, title changes based on state
             HStack {
+                Text(isSettingsOpen ? "Settings" : "Output Devices")
+                    .sectionHeaderStyle()
                 Spacer()
-                Button("Quit FineTune") {
-                    NSApplication.shared.terminate(nil)
-                }
-                .buttonStyle(.plain)
-                .font(DesignTokens.Typography.caption)
-                .foregroundStyle(DesignTokens.Colors.textSecondary)
-                .glassButtonStyle()
+                settingsButton
+            }
+            .padding(.bottom, DesignTokens.Spacing.xs)
+
+            // Conditional content with slide transition
+            if isSettingsOpen {
+                SettingsView(
+                    settings: $localAppSettings,
+                    updateManager: updateManager,
+                    launchIconStyle: launchIconStyle,
+                    onResetAll: {
+                        audioEngine.settingsManager.resetAllSettings()
+                        localAppSettings = audioEngine.settingsManager.appSettings
+                    }
+                )
+                .transition(.asymmetric(
+                    insertion: .move(edge: .trailing).combined(with: .opacity),
+                    removal: .move(edge: .trailing).combined(with: .opacity)
+                ))
+            } else {
+                mainContent
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .leading).combined(with: .opacity),
+                        removal: .move(edge: .leading).combined(with: .opacity)
+                    ))
             }
         }
         .padding(DesignTokens.Spacing.lg)
@@ -64,6 +81,7 @@ struct MenuBarPopupView: View {
         .environment(\.colorScheme, .dark)
         .onAppear {
             updateSortedDevices()
+            localAppSettings = audioEngine.settingsManager.appSettings
         }
         .onChange(of: audioEngine.outputDevices) { _, _ in
             updateSortedDevices()
@@ -71,11 +89,95 @@ struct MenuBarPopupView: View {
         .onChange(of: deviceVolumeMonitor.defaultDeviceID) { _, _ in
             updateSortedDevices()
         }
+        .onChange(of: localAppSettings) { _, newValue in
+            audioEngine.settingsManager.updateAppSettings(newValue)
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
             isPopupVisible = true
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
             isPopupVisible = false
+        }
+        .background {
+            // Hidden button to handle ⌘, keyboard shortcut for toggling settings
+            Button("") { toggleSettings() }
+                .keyboardShortcut(",", modifiers: .command)
+                .hidden()
+        }
+    }
+
+    // MARK: - Settings Button
+
+    /// Settings button with gear ↔ X morphing animation
+    private var settingsButton: some View {
+        Button {
+            toggleSettings()
+        } label: {
+            ZStack {
+                Image(systemName: "gearshape.fill")
+                    .opacity(isSettingsOpen ? 0 : 1)
+                    .rotationEffect(.degrees(isSettingsOpen ? 90 : 0))
+
+                Image(systemName: "xmark")
+                    .opacity(isSettingsOpen ? 1 : 0)
+                    .rotationEffect(.degrees(isSettingsOpen ? 0 : -90))
+            }
+            .font(.system(size: 12))
+            .symbolRenderingMode(.hierarchical)
+            .foregroundStyle(DesignTokens.Colors.interactiveDefault)
+            .frame(
+                minWidth: DesignTokens.Dimensions.minTouchTarget,
+                minHeight: DesignTokens.Dimensions.minTouchTarget
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isSettingsOpen)
+    }
+
+    private func toggleSettings() {
+        guard !isSettingsAnimating else { return }
+        isSettingsAnimating = true
+
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            isSettingsOpen.toggle()
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            isSettingsAnimating = false
+        }
+    }
+
+    // MARK: - Main Content
+
+    @ViewBuilder
+    private var mainContent: some View {
+        // Output Devices section
+        devicesSection
+
+        Divider()
+            .padding(.vertical, DesignTokens.Spacing.xs)
+
+        // Apps section
+        if audioEngine.apps.isEmpty {
+            emptyStateView
+        } else {
+            appsSection
+        }
+
+        Divider()
+            .padding(.vertical, DesignTokens.Spacing.xs)
+
+        // Quit button
+        HStack {
+            Spacer()
+            Button("Quit FineTune") {
+                NSApplication.shared.terminate(nil)
+            }
+            .buttonStyle(.plain)
+            .font(DesignTokens.Typography.caption)
+            .foregroundStyle(DesignTokens.Colors.textSecondary)
+            .glassButtonStyle()
         }
     }
 
@@ -83,9 +185,6 @@ struct MenuBarPopupView: View {
 
     @ViewBuilder
     private var devicesSection: some View {
-        SectionHeader(title: "Output Devices")
-            .padding(.bottom, DesignTokens.Spacing.xs)
-
         if sortedDevices.count > deviceScrollThreshold {
             ScrollView {
                 devicesContent
@@ -168,6 +267,7 @@ struct MenuBarPopupView: View {
                         selectedDeviceUID: deviceUID,
                         isFollowingDefault: audioEngine.isFollowingDefault(for: app),
                         defaultDeviceUID: deviceVolumeMonitor.defaultDeviceUID,
+                        maxVolumeBoost: audioEngine.settingsManager.appSettings.maxVolumeBoost,
                         getAudioLevel: { audioEngine.getAudioLevel(for: app) },
                         isPopupVisible: isPopupVisible,
                         onVolumeChange: { volume in
@@ -214,7 +314,6 @@ struct MenuBarPopupView: View {
                             }
                         }
                     )
-                    .id(app.id)
                 }
             }
         }
