@@ -10,5 +10,7 @@
 	<string>https://raw.githubusercontent.com/ronitsingh10/FineTune/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>xExSoQmCLDCez0KyhZ9EM9PdOZFZgyX/+VF+OVrpIlo=</string>
+	<key>SUEnableInstallerLauncherService</key>
+	<true/>
 </dict>
 </plist>
