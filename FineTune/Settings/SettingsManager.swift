@@ -83,6 +83,10 @@ final class SettingsManager {
         var ddcVolumes: [String: Int] = [:]       // device UID → volume (0-100)
         var ddcMuteStates: [String: Bool] = [:]   // device UID → software mute state
         var ddcSavedVolumes: [String: Int] = [:]  // device UID → volume before mute
+
+        // Device priority (ordered device UIDs, highest priority first)
+        var outputDevicePriority: [String] = []
+        var inputDevicePriority: [String] = []
     }
 
     init(directory: URL? = nil) {
@@ -238,6 +242,38 @@ final class SettingsManager {
         scheduleSave()
     }
 
+    // MARK: - Device Priority
+
+    var devicePriorityOrder: [String] {
+        settings.outputDevicePriority
+    }
+
+    func setDevicePriorityOrder(_ uids: [String]) {
+        settings.outputDevicePriority = uids
+        scheduleSave()
+    }
+
+    func ensureDeviceInPriority(_ uid: String) {
+        guard !settings.outputDevicePriority.contains(uid) else { return }
+        settings.outputDevicePriority.append(uid)
+        scheduleSave()
+    }
+
+    var inputDevicePriorityOrder: [String] {
+        settings.inputDevicePriority
+    }
+
+    func setInputDevicePriorityOrder(_ uids: [String]) {
+        settings.inputDevicePriority = uids
+        scheduleSave()
+    }
+
+    func ensureInputDeviceInPriority(_ uid: String) {
+        guard !settings.inputDevicePriority.contains(uid) else { return }
+        settings.inputDevicePriority.append(uid)
+        scheduleSave()
+    }
+
     // MARK: - App-Wide Settings
 
     var appSettings: AppSettings {
@@ -288,6 +324,8 @@ final class SettingsManager {
         settings.ddcVolumes.removeAll()
         settings.ddcMuteStates.removeAll()
         settings.ddcSavedVolumes.removeAll()
+        settings.outputDevicePriority.removeAll()
+        settings.inputDevicePriority.removeAll()
 
         // Also unregister from launch at login
         try? SMAppService.mainApp.unregister()
