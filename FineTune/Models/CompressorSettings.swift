@@ -10,7 +10,7 @@ struct CompressorSettings: Codable, Equatable {
     static let minReleaseMs: Float = 10.0
     static let maxReleaseMs: Float = 500.0
     static let minMakeupGainDB: Float = -12.0
-    static let maxMakeupGainDB: Float = 24.0
+    static let maxMakeupGainDB: Float = 12.0
 
     /// Whether compressor processing is enabled.
     /// Default is disabled to preserve existing app behavior.

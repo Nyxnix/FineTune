@@ -6,7 +6,18 @@ import AppKit
 /// Uses child window relationship for proper dismissal behavior
 struct PopoverHost<Content: View>: NSViewRepresentable {
     @Binding var isPresented: Bool
+    let contentVersion: Int?
     @ViewBuilder let content: () -> Content
+
+    init(
+        isPresented: Binding<Bool>,
+        contentVersion: Int? = nil,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self._isPresented = isPresented
+        self.contentVersion = contentVersion
+        self.content = content
+    }
 
     func makeNSView(context: Context) -> NSView {
         NSView()
@@ -20,10 +31,12 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         if isPresented {
             if context.coordinator.panel == nil {
-                context.coordinator.showPanel(from: nsView, content: content)
+                context.coordinator.showPanel(from: nsView, contentVersion: contentVersion, content: content)
             } else {
-                // Update content when state changes while panel is open
-                context.coordinator.updateContent(content)
+                // While open, only update the hosted SwiftUI root when relevant state changed.
+                if context.coordinator.shouldUpdateContent(for: contentVersion) {
+                    context.coordinator.updateContent(contentVersion: contentVersion, content)
+                }
             }
         } else {
             context.coordinator.dismissPanel()
@@ -41,12 +54,13 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
         var localEventMonitor: Any?
         var globalEventMonitor: Any?
         var appDeactivateObserver: NSObjectProtocol?
+        private var lastContentVersion: Int?
 
         init(isPresented: Binding<Bool>) {
             self._isPresented = isPresented
         }
 
-        func showPanel<V: View>(from parentView: NSView, content: () -> V) {
+        func showPanel<V: View>(from parentView: NSView, contentVersion: Int?, content: () -> V) {
             guard let parentWindow = parentView.window else { return }
 
             // Create borderless panel that doesn't steal focus
@@ -85,6 +99,7 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
             parentWindow.addChildWindow(panel, ordered: .above)
             panel.orderFront(nil)
             self.panel = panel
+            self.lastContentVersion = contentVersion
 
             // Get trigger button frame in screen coordinates
             let triggerFrame = parentWindow.convertToScreen(parentView.convert(parentView.bounds, to: nil))
@@ -118,16 +133,21 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
             }
         }
 
-        func updateContent<V: View>(_ content: () -> V) {
+        func updateContent<V: View>(contentVersion: Int?, _ content: () -> V) {
             guard let hostingView = hostingView else { return }
             // Update existing hosting view's rootView instead of replacing it
             // This allows SwiftUI to perform efficient diffing without flickering
             hostingView.rootView = AnyView(content().preferredColorScheme(.dark))
+            lastContentVersion = contentVersion
             // Resize panel if content size changed
             let newSize = hostingView.fittingSize
             if let panel = panel, panel.frame.size != newSize {
                 panel.setContentSize(newSize)
             }
+        }
+
+        func shouldUpdateContent(for contentVersion: Int?) -> Bool {
+            contentVersion != lastContentVersion
         }
 
         func dismissPanel() {
@@ -150,6 +170,7 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
             panel?.orderOut(nil)
             panel = nil
             hostingView = nil
+            lastContentVersion = nil
             if isPresented {
                 isPresented = false
             }

@@ -654,8 +654,15 @@ struct MenuBarPopupView: View {
             } else {
                 expandedEQAppID = appID
             }
-            if isExpanding {
-                scrollProxy.scrollTo(appID, anchor: .top)
+        }
+
+        // Avoid scrolling during the same layout transaction that inserts/removes
+        // the expandable row; this can trigger AppKit layout reentrancy warnings.
+        if isExpanding {
+            DispatchQueue.main.async {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                    scrollProxy.scrollTo(appID, anchor: .top)
+                }
             }
         }
 

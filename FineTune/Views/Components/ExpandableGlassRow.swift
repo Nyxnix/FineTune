@@ -18,12 +18,9 @@ struct ExpandableGlassRow<Header: View, ExpandedContent: View>: View {
             // Expandable content - conditional rendering lets SwiftUI calculate natural height
             if isExpanded {
                 expandedContent()
-                    .transition(
-                        .asymmetric(
-                            insertion: .opacity.combined(with: .scale(scale: 0.98, anchor: .top)),
-                            removal: .opacity.combined(with: .scale(scale: 0.98, anchor: .top))
-                        )
-                    )
+                    // Keep transition transform-free. AppKit-backed Slider can log
+                    // invalid geometry faults when inserted/removed under scale transforms.
+                    .transition(.opacity)
             }
         }
         .padding(.horizontal, DesignTokens.Spacing.sm)
