@@ -302,8 +302,15 @@ final class ProcessTapController {
         // All devices in the aggregate will be included
         let primaryDeviceUID = newDeviceUIDs[0]
 
-        do {
+        crossfadeTask?.cancel()
+        crossfadeTask = Task {
             try await performCrossfadeSwitch(to: primaryDeviceUID, allDeviceUIDs: newDeviceUIDs)
+        }
+        do {
+            try await crossfadeTask!.value
+        } catch is CancellationError {
+            logger.info("[UPDATE] Crossfade cancelled by invalidate()")
+            return
         } catch {
             logger.warning("[UPDATE] Crossfade failed: \(error.localizedDescription), using fallback")
             guard primaryResources.tapDescription != nil else {
@@ -311,6 +318,7 @@ final class ProcessTapController {
             }
             try await performDestructiveDeviceSwitch(to: primaryDeviceUID, allDeviceUIDs: newDeviceUIDs)
         }
+        crossfadeTask = nil
 
         targetDeviceUIDs = newDeviceUIDs
         currentDeviceUIDs = newDeviceUIDs
@@ -518,7 +526,7 @@ final class ProcessTapController {
     }
 
     private func destroyPrimaryTap() {
-        primaryResources.destroy()
+        primaryResources.destroyAsync()
     }
 
     /// Tears down any in-progress secondary tap (used by re-entrant crossfade guard).
@@ -751,7 +759,8 @@ final class ProcessTapController {
             // Read preamp attenuation once per buffer (RT-safe atomic Float read).
             // This reduces signal before EQ to prevent clipping when bands are boosted.
             // When EQ is disabled or crossfading, skip preamp (no EQ boost to compensate for).
-            let preamp: Float = (eqProcessor != nil && !crossfadeState.isActive) ? (eqProcessor?.preampAttenuation ?? 1.0) : 1.0
+            let eq = eqProcessor  // Single atomic read — prevents TOCTOU with EQ check below
+            let preamp: Float = (eq != nil && !crossfadeState.isActive) ? (eq?.preampAttenuation ?? 1.0) : 1.0
 
             // Per-sample volume ramping prevents clicks. The exponential approach
             // (currentVol += (target - current) * coeff) gives smooth transitions.
@@ -764,10 +773,10 @@ final class ProcessTapController {
             // EQ intentionally disabled during crossfade: biquad delay buffers contain
             // state tuned to the old device's sample rate. Processing through them produces
             // incorrect frequency response. The ~50ms crossfade gap is inaudible.
-            if let eqProcessor = eqProcessor, !crossfadeState.isActive {
+            if let eq = eq, !crossfadeState.isActive {
                 let channels = Int(inputBuffer.mNumberChannels)
                 let frameCount = channels > 1 ? sampleCount / channels : sampleCount
-                eqProcessor.process(input: outputSamples, output: outputSamples, frameCount: frameCount)
+                eq.process(input: outputSamples, output: outputSamples, frameCount: frameCount)
             }
 
             // Post-EQ soft limiting: catches any clipping from EQ boost or volume > 1.0.
@@ -852,7 +861,8 @@ final class ProcessTapController {
             let outputSamples = outputData.assumingMemoryBound(to: Float.self)
             let sampleCount = Int(inputBuffer.mDataByteSize) / MemoryLayout<Float>.size
 
-            let preamp: Float = (eqProcessor != nil && !crossfadeState.isActive) ? (eqProcessor?.preampAttenuation ?? 1.0) : 1.0
+            let eq = eqProcessor  // Single atomic read — prevents TOCTOU with EQ check below
+            let preamp: Float = (eq != nil && !crossfadeState.isActive) ? (eq?.preampAttenuation ?? 1.0) : 1.0
 
             for i in 0..<sampleCount {
                 currentVol += (targetVol - currentVol) * secondaryRampCoefficient
@@ -863,10 +873,10 @@ final class ProcessTapController {
             // EQ intentionally disabled during crossfade: biquad delay buffers contain
             // state tuned to the old device's sample rate. Processing through them produces
             // incorrect frequency response. The ~50ms crossfade gap is inaudible.
-            if let eqProcessor = eqProcessor, !crossfadeState.isActive {
+            if let eq = eq, !crossfadeState.isActive {
                 let channels = Int(inputBuffer.mNumberChannels)
                 let frameCount = channels > 1 ? sampleCount / channels : sampleCount
-                eqProcessor.process(input: outputSamples, output: outputSamples, frameCount: frameCount)
+                eq.process(input: outputSamples, output: outputSamples, frameCount: frameCount)
             }
 
             // Post-EQ soft limiting: catches any clipping from EQ boost or volume > 1.0.
