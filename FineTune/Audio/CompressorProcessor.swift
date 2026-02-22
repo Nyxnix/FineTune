@@ -46,6 +46,10 @@ final class CompressorProcessor: @unchecked Sendable {
             attackMs: settings.clampedAttackMs,
             releaseMs: settings.clampedReleaseMs
         )
+
+        // Reset detector state when sample rate changes to avoid stale gain envelopes.
+        _envelope = 0.0
+        _smoothedGain = 1.0
     }
 
     /// Process interleaved audio in place.

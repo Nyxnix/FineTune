@@ -125,13 +125,13 @@ struct EQPanelView: View {
                 compressorSlider(
                     label: "Attack",
                     value: Binding(
-                        get: { Double(compressorSettings.attackMs) },
+                        get: { Double(compressorSettings.clampedAttackMs) },
                         set: { newValue in
                             compressorSettings.attackMs = Float(newValue.rounded())
                             onCompressorSettingsChanged(compressorSettings)
                         }
                     ),
-                    range: 1.0...Double(CompressorSettings.maxAttackMs),
+                    range: Double(CompressorSettings.minAttackMs)...Double(CompressorSettings.maxAttackMs),
                     valueSuffix: " ms",
                     valueFormat: "%.0f",
                     markerInterval: 10.0,

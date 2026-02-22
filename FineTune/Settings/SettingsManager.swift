@@ -203,11 +203,11 @@ final class SettingsManager {
     }
 
     func getCompressorSettings(for appIdentifier: String) -> CompressorSettings {
-        settings.appCompressorSettings[appIdentifier] ?? .default
+        (settings.appCompressorSettings[appIdentifier] ?? .default).normalized()
     }
 
     func setCompressorSettings(_ compressorSettings: CompressorSettings, for appIdentifier: String) {
-        settings.appCompressorSettings[appIdentifier] = compressorSettings
+        settings.appCompressorSettings[appIdentifier] = compressorSettings.normalized()
         scheduleSave()
     }
 

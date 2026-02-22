@@ -5,7 +5,7 @@ struct CompressorSettings: Codable, Equatable {
     static let maxThresholdDB: Float = 0.0
     static let minRatio: Float = 1.0
     static let maxRatio: Float = 20.0
-    static let minAttackMs: Float = 0.1
+    static let minAttackMs: Float = 1.0
     static let maxAttackMs: Float = 100.0
     static let minReleaseMs: Float = 10.0
     static let maxReleaseMs: Float = 500.0
@@ -56,7 +56,7 @@ struct CompressorSettings: Codable, Equatable {
     }
 
     var clampedAttackMs: Float {
-        max(Self.minAttackMs, min(Self.maxAttackMs, attackMs))
+        max(Self.minAttackMs, min(Self.maxAttackMs, attackMs.rounded()))
     }
 
     var clampedReleaseMs: Float {
@@ -65,6 +65,18 @@ struct CompressorSettings: Codable, Equatable {
 
     var clampedMakeupGainDB: Float {
         max(Self.minMakeupGainDB, min(Self.maxMakeupGainDB, makeupGainDB))
+    }
+
+    /// Returns settings normalized to valid persisted values.
+    func normalized() -> CompressorSettings {
+        CompressorSettings(
+            isEnabled: isEnabled,
+            thresholdDB: clampedThresholdDB,
+            ratio: clampedRatio,
+            attackMs: clampedAttackMs,
+            releaseMs: clampedReleaseMs,
+            makeupGainDB: clampedMakeupGainDB
+        )
     }
 
     static let `default` = CompressorSettings()
