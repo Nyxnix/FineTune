@@ -774,22 +774,27 @@ final class ProcessTapController {
             // (currentVol += (target - current) * coeff) gives smooth transitions.
             for i in 0..<sampleCount {
                 currentVol += (targetVol - currentVol) * rampCoefficient
-                let sample = inputSamples[i] * currentVol * crossfadeMultiplier * preamp
+                let sample = inputSamples[i] * currentVol * crossfadeMultiplier
                 outputSamples[i] = sample
             }
 
-            // EQ intentionally disabled during crossfade: biquad delay buffers contain
-            // state tuned to the old device's sample rate. Processing through them produces
-            // incorrect frequency response. The ~50ms crossfade gap is inaudible.
+            // EQ/compressor intentionally disabled during crossfade: delay/envelope state is
+            // tuned to the old device's sample rate. The ~50ms crossfade gap is inaudible.
             let compressor = compressorProcessor  // Match EQ pattern; single RT-safe read
             if !crossfadeState.isActive {
                 let channels = max(Int(inputBuffer.mNumberChannels), 1)
                 let frameCount = sampleCount / channels
-                if let eq {
-                    eq.process(input: outputSamples, output: outputSamples, frameCount: frameCount)
-                }
                 if let compressor {
                     compressor.process(buffer: outputSamples, frameCount: frameCount, channels: channels)
+                }
+                if let eq {
+                    // Keep preamp in the EQ stage: Gain -> Compressor -> EQ.
+                    if preamp != 1.0 {
+                        for sampleIndex in 0..<sampleCount {
+                            outputSamples[sampleIndex] *= preamp
+                        }
+                    }
+                    eq.process(input: outputSamples, output: outputSamples, frameCount: frameCount)
                 }
             }
 
@@ -880,22 +885,27 @@ final class ProcessTapController {
 
             for i in 0..<sampleCount {
                 currentVol += (targetVol - currentVol) * secondaryRampCoefficient
-                let sample = inputSamples[i] * currentVol * crossfadeMultiplier * preamp
+                let sample = inputSamples[i] * currentVol * crossfadeMultiplier
                 outputSamples[i] = sample
             }
 
-            // EQ intentionally disabled during crossfade: biquad delay buffers contain
-            // state tuned to the old device's sample rate. Processing through them produces
-            // incorrect frequency response. The ~50ms crossfade gap is inaudible.
+            // EQ/compressor intentionally disabled during crossfade: delay/envelope state is
+            // tuned to the old device's sample rate. The ~50ms crossfade gap is inaudible.
             let compressor = compressorProcessor  // Match EQ pattern; single RT-safe read
             if !crossfadeState.isActive {
                 let channels = max(Int(inputBuffer.mNumberChannels), 1)
                 let frameCount = sampleCount / channels
-                if let eq {
-                    eq.process(input: outputSamples, output: outputSamples, frameCount: frameCount)
-                }
                 if let compressor {
                     compressor.process(buffer: outputSamples, frameCount: frameCount, channels: channels)
+                }
+                if let eq {
+                    // Keep preamp in the EQ stage: Gain -> Compressor -> EQ.
+                    if preamp != 1.0 {
+                        for sampleIndex in 0..<sampleCount {
+                            outputSamples[sampleIndex] *= preamp
+                        }
+                    }
+                    eq.process(input: outputSamples, output: outputSamples, frameCount: frameCount)
                 }
             }
 
